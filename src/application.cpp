@@ -64,7 +64,9 @@ void apply_page(UiSnapshot& snapshot, const PageConfig& page) {
 void apply_context_fallback_page(UiSnapshot& snapshot, const std::string& context) {
     snapshot.page_id = "context_" + context;
     snapshot.page_type = context;
-    snapshot.page_title = context == "song" ? "Song" : (context == "track" ? "Track" : "Settings");
+    snapshot.page_title = context == "song"
+        ? "Song"
+        : (context == "track" ? "Track" : (context == "chords" ? "Chords" : "Settings"));
     snapshot.page_variant = "square";
     snapshot.page_image_path.clear();
     snapshot.page_image_x = 0;
@@ -176,7 +178,7 @@ const char* overlay_page_type(TransportOverlay overlay) {
 
 void maybe_apply_context_page(UiSnapshot& snapshot, const PageController& controller) {
     const std::string& context = snapshot.sequencer.input_context;
-    if (context != "song" && context != "track" && context != "settings") {
+    if (context != "song" && context != "track" && context != "settings" && context != "chords") {
         return;
     }
     if (snapshot.page_type == context) {
