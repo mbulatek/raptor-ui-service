@@ -18,6 +18,7 @@ constexpr std::string_view kPageTypes[] = {
     "song",
     "track",
     "settings",
+    "chords",
     "midi_monitor",
     "status",
 };

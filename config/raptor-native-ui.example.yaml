@@ -28,7 +28,7 @@ displays:
       spi_speed_hz: 10000000
       spi_flags: 3
       cs_gpio: -1
-      reset_gpio: 27
+      reset_gpio: 16
       dc_gpio: 25
 
   - id: sidecar
@@ -113,6 +113,12 @@ pages:
   - id: perf_settings_main
     type: settings
     title: Settings
+    allowed_models: [oled_1in5_b]
+    default_variant: square
+
+  - id: perf_chords_main
+    type: chords
+    title: Chords
     allowed_models: [oled_1in5_b]
     default_variant: square
 

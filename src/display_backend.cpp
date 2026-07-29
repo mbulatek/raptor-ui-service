@@ -824,6 +824,9 @@ void draw_boot_page(const UiSnapshot& snapshot, const std::string& layout) {
     waveshare_display_draw_status(snapshot.page_title.c_str(), line1, line2, line3);
 }
 
+void draw_chords_page(const UiSnapshot& /*snapshot*/, const std::string& /*layout*/) {
+}
+
 void draw_page(const UiSnapshot& snapshot, const std::string& layout) {
     if (snapshot.page_type == "boot") {
         draw_boot_page(snapshot, layout);
@@ -833,6 +836,8 @@ void draw_page(const UiSnapshot& snapshot, const std::string& layout) {
         draw_track_page(snapshot, layout);
     } else if (snapshot.page_type == "settings") {
         draw_settings_page(snapshot, layout);
+    } else if (snapshot.page_type == "chords") {
+        draw_chords_page(snapshot, layout);
     } else if (snapshot.page_type == "transport") {
         draw_transport_page(snapshot, layout);
     } else if (snapshot.page_type == "midi_monitor") {
