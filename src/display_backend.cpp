@@ -1,6 +1,7 @@
 ﻿#include "raptor_ui/display_backend.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -519,10 +520,9 @@ const SequencerTrackSummary* find_focused_track(const UiSnapshot& snapshot) {
 }
 
 void draw_song_page(const UiSnapshot& snapshot, const std::string& /*layout*/) {
-    const bool io_variant =
-        snapshot.page_variant == "io" ||
-        snapshot.page_variant == "song_io" ||
-        snapshot.page_variant == "details";
+    const bool tracks_variant =
+        snapshot.page_variant == "tracks" ||
+        snapshot.page_variant == "song_tracks";
 
     const std::string title = snapshot.sequencer.song.available && !snapshot.sequencer.song.title.empty()
         ? snapshot.sequencer.song.title
@@ -530,64 +530,72 @@ void draw_song_page(const UiSnapshot& snapshot, const std::string& /*layout*/) {
     Paint_DrawString_EN(0, 0, trim_text(title, 18).c_str(), &Font12, WHITE, BLACK);
     Paint_DrawLine(0, 16, 127, 16, WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
 
-    if (!snapshot.sequencer.song.available || snapshot.sequencer.song.tracks.empty()) {
-        Paint_DrawString_EN(0, 28, "No song data", &Font12, WHITE, BLACK);
+    if (!tracks_variant) {
+        char bpm_value[24];
+        char length_value[24];
+        char signature_value[24];
+        std::snprintf(bpm_value, sizeof(bpm_value), "%.0f BPM", snapshot.sequencer.bpm.value_or(120.0));
+        std::snprintf(length_value, sizeof(length_value), "%u bars", snapshot.sequencer.bars_total.value_or(8U));
+        std::snprintf(
+            signature_value,
+            sizeof(signature_value),
+            "%u/%u",
+            snapshot.sequencer.beats_per_bar.value_or(4U),
+            snapshot.sequencer.beat_unit.value_or(4U));
+
+        std::vector<DisplayField> fields {
+            DisplayField {"Tempo", bpm_value},
+            DisplayField {"Length", length_value},
+            DisplayField {"Signature", signature_value},
+        };
+        const std::size_t selected = fields.empty()
+            ? 0U
+            : static_cast<std::size_t>(snapshot.sequencer.ui_scroll_offset % fields.size());
+        draw_editable_field_rows(
+            fields,
+            selected,
+            snapshot.sequencer.ui_editing,
+            false,
+            58U,
+            snapshot.render_count);
         return;
     }
 
-    if (!io_variant) {
-        const std::size_t max_rows = 7;
-        const std::size_t first = scroll_start_index(snapshot.sequencer.ui_scroll_offset, snapshot.sequencer.song.tracks.size(), max_rows);
-        if (snapshot.sequencer.song.tracks.size() > max_rows) {
-            char pos[16];
-            std::snprintf(pos, sizeof(pos), "%zu/%zu", first + 1, snapshot.sequencer.song.tracks.size());
-            Paint_DrawString_EN(94, 3, pos, &Font8, WHITE, BLACK);
-        }
-        for (std::size_t row = 0; row < max_rows && first + row < snapshot.sequencer.song.tracks.size(); ++row) {
-            const auto& track = snapshot.sequencer.song.tracks[first + row];
-            const int y = 20 + static_cast<int>(row * 15);
+    if (!snapshot.sequencer.song.available || snapshot.sequencer.song.tracks.empty()) {
+        Paint_DrawString_EN(0, 28, "No tracks", &Font12, WHITE, BLACK);
+        return;
+    }
 
-            const std::string name = trim_text(track.name.empty() ? track.id : track.name, 11);
-            Paint_DrawString_EN(0, static_cast<UWORD>(y), name.c_str(), &Font8, WHITE, BLACK);
-
-            Paint_DrawRectangle(78, static_cast<UWORD>(y + 2), 124, static_cast<UWORD>(y + 10), WHITE, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
-            if (!track.muted) {
-                Paint_DrawRectangle(80, static_cast<UWORD>(y + 4), 122, static_cast<UWORD>(y + 8), WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+    const std::size_t max_rows = 7;
+    std::size_t selected = snapshot.sequencer.song.tracks.empty()
+        ? 0U
+        : static_cast<std::size_t>(snapshot.sequencer.ui_scroll_offset % snapshot.sequencer.song.tracks.size());
+    if (!snapshot.sequencer.song.active_track_id.empty()) {
+        for (std::size_t i = 0; i < snapshot.sequencer.song.tracks.size(); ++i) {
+            if (snapshot.sequencer.song.tracks[i].id == snapshot.sequencer.song.active_track_id) {
+                selected = i;
+                break;
             }
         }
-        return;
     }
-
-    const std::string q = snapshot.sequencer.recording_quantize.empty() ? "off" : snapshot.sequencer.recording_quantize;
-    const std::size_t max_rows = 4;
-    const std::size_t first = scroll_start_index(snapshot.sequencer.ui_scroll_offset, snapshot.sequencer.song.tracks.size(), max_rows);
+    const std::size_t first = scroll_start_index(static_cast<std::uint32_t>(selected), snapshot.sequencer.song.tracks.size(), max_rows);
     if (snapshot.sequencer.song.tracks.size() > max_rows) {
-        char pos[16];
-        std::snprintf(pos, sizeof(pos), "%zu/%zu", first + 1, snapshot.sequencer.song.tracks.size());
+        char pos[32];
+        std::snprintf(pos, sizeof(pos), "%zu/%zu", selected + 1U, snapshot.sequencer.song.tracks.size());
         Paint_DrawString_EN(94, 3, pos, &Font8, WHITE, BLACK);
     }
     for (std::size_t row = 0; row < max_rows && first + row < snapshot.sequencer.song.tracks.size(); ++row) {
         const auto& track = snapshot.sequencer.song.tracks[first + row];
-        const int y = 20 + static_cast<int>(row * 26);
-
-        const std::string name = trim_text(track.name.empty() ? track.id : track.name, 14);
-        Paint_DrawString_EN(0, static_cast<UWORD>(y), name.c_str(), &Font8, WHITE, BLACK);
-
-        char io_line[64];
-        std::snprintf(
-            io_line,
-            sizeof(io_line),
-            "I%s/%d O%s/%d Q:%s",
-            track.midi_in.empty() ? "-" : track.midi_in.c_str(),
-            track.midi_channel_in,
-            track.midi_out.empty() ? "-" : track.midi_out.c_str(),
-            track.midi_channel_out,
-            q.c_str());
-        Paint_DrawString_EN(0, static_cast<UWORD>(y + 10), trim_text(io_line, 21).c_str(), &Font8, WHITE, BLACK);
-
-        if (track.muted) {
-            Paint_DrawString_EN(108, static_cast<UWORD>(y), "M", &Font8, WHITE, BLACK);
+        const bool active = first + row == selected;
+        const int y = 20 + static_cast<int>(row * 15);
+        if (active) {
+            Paint_DrawRectangle(0, static_cast<UWORD>(y - 1), 127, static_cast<UWORD>(y + 11), WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
         }
+
+        const std::string name = trim_text(track.name.empty() ? track.id : track.name, 10);
+        Paint_DrawString_EN(2, static_cast<UWORD>(y), active ? ">" : " ", &Font8, active ? BLACK : WHITE, active ? WHITE : BLACK);
+        Paint_DrawString_EN(12, static_cast<UWORD>(y), name.c_str(), &Font8, active ? BLACK : WHITE, active ? WHITE : BLACK);
+        Paint_DrawString_EN(104, static_cast<UWORD>(y), track.muted ? "[M]" : "[ ]", &Font8, active ? BLACK : WHITE, active ? WHITE : BLACK);
     }
 }
 
@@ -600,6 +608,44 @@ void draw_track_page(const UiSnapshot& snapshot, const std::string& layout) {
 
     Paint_DrawString_EN(0, 0, trim_text(track_title, 18).c_str(), &Font12, WHITE, BLACK);
     Paint_DrawLine(0, 16, 127, 16, WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+
+    const bool controller_lanes_variant =
+        snapshot.page_variant == "controller_lanes" ||
+        snapshot.page_variant == "track_controller_lanes";
+    if (controller_lanes_variant) {
+        if (track == nullptr || track->controller_lanes.empty()) {
+            Paint_DrawString_EN(0, 28, "No CC lanes", &Font12, WHITE, BLACK);
+            return;
+        }
+
+        const auto& lanes = track->controller_lanes;
+        const std::size_t max_rows = layout == "compact" || snapshot.display_height <= 64 ? 3U : 7U;
+        const std::size_t selected = static_cast<std::size_t>(snapshot.sequencer.ui_scroll_offset % lanes.size());
+        const std::size_t first = scroll_start_index(static_cast<std::uint32_t>(selected), lanes.size(), max_rows);
+        if (lanes.size() > max_rows) {
+            char pos[32];
+            std::snprintf(pos, sizeof(pos), "%zu/%zu", selected + 1U, lanes.size());
+            Paint_DrawString_EN(94, 3, pos, &Font8, WHITE, BLACK);
+        }
+
+        for (std::size_t row = 0; row < max_rows && first + row < lanes.size(); ++row) {
+            const auto& lane = lanes[first + row];
+            const bool active = first + row == selected;
+            const int y = 20 + static_cast<int>(row * 15);
+            if (active) {
+                Paint_DrawRectangle(0, static_cast<UWORD>(y - 1), 127, static_cast<UWORD>(y + 11), WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+            }
+
+            const std::string label = trim_text(lane.label.empty() ? lane.key : lane.label, 9);
+            char count[12];
+            std::snprintf(count, sizeof(count), "%u", lane.event_count);
+            Paint_DrawString_EN(2, static_cast<UWORD>(y), active ? ">" : " ", &Font8, active ? BLACK : WHITE, active ? WHITE : BLACK);
+            Paint_DrawString_EN(12, static_cast<UWORD>(y), label.c_str(), &Font8, active ? BLACK : WHITE, active ? WHITE : BLACK);
+            Paint_DrawString_EN(78, static_cast<UWORD>(y), count, &Font8, active ? BLACK : WHITE, active ? WHITE : BLACK);
+            Paint_DrawString_EN(104, static_cast<UWORD>(y), lane.muted ? "[M]" : "[ ]", &Font8, active ? BLACK : WHITE, active ? WHITE : BLACK);
+        }
+        return;
+    }
 
     std::string midi_in = "-";
     std::string midi_out = "-";
@@ -824,7 +870,149 @@ void draw_boot_page(const UiSnapshot& snapshot, const std::string& layout) {
     waveshare_display_draw_status(snapshot.page_title.c_str(), line1, line2, line3);
 }
 
-void draw_chords_page(const UiSnapshot& /*snapshot*/, const std::string& /*layout*/) {
+void draw_chords_page(const UiSnapshot& snapshot, const std::string& layout) {
+    const int width = static_cast<int>(snapshot.display_width == 0 ? 128 : snapshot.display_width);
+    const int height = static_cast<int>(snapshot.display_height == 0 ? 128 : snapshot.display_height);
+    const bool compact = layout == "compact" || height <= 64;
+    const std::string title = "Chords pad";
+    char octave_label[16];
+    std::snprintf(
+        octave_label,
+        sizeof(octave_label),
+        "Oct %u",
+        static_cast<unsigned int>(snapshot.sequencer.chord_pad_right_hand_octave));
+
+    if (compact) {
+        Paint_DrawString_EN(0, 0, title.c_str(), &Font8, WHITE, BLACK);
+        Paint_DrawString_EN(static_cast<UWORD>(std::max(0, width - 32)), 0, octave_label, &Font8, WHITE, BLACK);
+    } else {
+        Paint_DrawString_EN(0, 0, title.c_str(), &Font12, WHITE, BLACK);
+        Paint_DrawString_EN(static_cast<UWORD>(std::max(0, width - 32)), 3, octave_label, &Font8, WHITE, BLACK);
+        Paint_DrawLine(0, 16, static_cast<UWORD>(std::max(0, width - 1)), 16, WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+    }
+
+    const int margin = compact ? 2 : 7;
+    const int gap = compact ? 2 : 5;
+    const int grid_top_min = compact ? 12 : 25;
+    const int available_width = std::max(1, width - (margin * 2));
+    const int available_height = std::max(1, height - grid_top_min - margin);
+    const int cell_by_width = (available_width - (gap * 3)) / 4;
+    const int cell_by_height = (available_height - gap) / 2;
+    const int cell = std::max(4, std::min(cell_by_width, cell_by_height));
+    const int grid_width = (cell * 4) + (gap * 3);
+    const int grid_height = (cell * 2) + gap;
+    const int grid_x = std::max(0, (width - grid_width) / 2);
+    const int grid_y = std::max(grid_top_min, grid_top_min + ((available_height - grid_height) / 2));
+
+    for (int index = 0; index < 8; ++index) {
+        const int row = index / 4;
+        const int col = index % 4;
+        const int x = grid_x + (col * (cell + gap));
+        const int y = grid_y + (row * (cell + gap));
+        const bool pressed =
+            static_cast<std::size_t>(index) < snapshot.sequencer.chord_pad_pressed.size() &&
+            snapshot.sequencer.chord_pad_pressed[static_cast<std::size_t>(index)];
+
+        Paint_DrawRectangle(
+            static_cast<UWORD>(x),
+            static_cast<UWORD>(y),
+            static_cast<UWORD>(std::min(width - 1, x + cell - 1)),
+            static_cast<UWORD>(std::min(height - 1, y + cell - 1)),
+            WHITE,
+            DOT_PIXEL_1X1,
+            pressed ? DRAW_FILL_FULL : DRAW_FILL_EMPTY);
+    }
+}
+
+void draw_confirmation_button(const int x,
+                              const int y,
+                              const int w,
+                              const int h,
+                              const std::string& label,
+                              const bool selected) {
+    const UWORD fg = selected ? BLACK : WHITE;
+    const UWORD bg = selected ? WHITE : BLACK;
+    Paint_DrawRectangle(
+        static_cast<UWORD>(x),
+        static_cast<UWORD>(y),
+        static_cast<UWORD>(x + w),
+        static_cast<UWORD>(y + h),
+        WHITE,
+        DOT_PIXEL_1X1,
+        selected ? DRAW_FILL_FULL : DRAW_FILL_EMPTY);
+    Paint_DrawString_EN(
+        static_cast<UWORD>(x + 4),
+        static_cast<UWORD>(y + 5),
+        trim_text(label, static_cast<std::size_t>(std::max(1, (w - 8) / 7))).c_str(),
+        &Font8,
+        fg,
+        bg);
+}
+
+void draw_confirmation_popup(const UiSnapshot& snapshot) {
+    const auto& confirmation = snapshot.sequencer.ui_confirmation;
+    if (!confirmation.active) {
+        return;
+    }
+
+    const int x0 = snapshot.display_width <= 96 ? 2 : 6;
+    const int display_height = static_cast<int>(snapshot.display_height == 0 ? 128 : snapshot.display_height);
+    const bool compact = display_height <= 64;
+    const int y0 = compact ? 4 : 16;
+    const int x1 = static_cast<int>(snapshot.display_width == 0 ? 128 : snapshot.display_width) - x0 - 1;
+    const int y1 = display_height - y0 - 1;
+
+    Paint_DrawRectangle(
+        static_cast<UWORD>(x0),
+        static_cast<UWORD>(y0),
+        static_cast<UWORD>(x1),
+        static_cast<UWORD>(y1),
+        BLACK,
+        DOT_PIXEL_1X1,
+        DRAW_FILL_FULL);
+    Paint_DrawRectangle(
+        static_cast<UWORD>(x0),
+        static_cast<UWORD>(y0),
+        static_cast<UWORD>(x1),
+        static_cast<UWORD>(y1),
+        WHITE,
+        DOT_PIXEL_1X1,
+        DRAW_FILL_EMPTY);
+
+    const std::string title = confirmation.title.empty() ? std::string {"Confirm"} : confirmation.title;
+    const std::string message = confirmation.message.empty() ? std::string {"Remove selected item"} : confirmation.message;
+    Paint_DrawString_EN(static_cast<UWORD>(x0 + 6), static_cast<UWORD>(y0 + 8), trim_text(title, 16).c_str(), &Font12, WHITE, BLACK);
+    Paint_DrawLine(
+        static_cast<UWORD>(x0 + 4),
+        static_cast<UWORD>(y0 + 24),
+        static_cast<UWORD>(x1 - 4),
+        static_cast<UWORD>(y0 + 24),
+        WHITE,
+        DOT_PIXEL_1X1,
+        LINE_STYLE_SOLID);
+    if (!compact) {
+        Paint_DrawString_EN(static_cast<UWORD>(x0 + 6), static_cast<UWORD>(y0 + 34), trim_text(message, 18).c_str(), &Font8, WHITE, BLACK);
+    }
+
+    const int button_h = compact ? 14 : 18;
+    const int button_gap = compact ? 2 : 4;
+    const int button_w = std::max(44, x1 - x0 - 12);
+    const int first_button_y = y1 - (button_h * 2) - button_gap - (compact ? 4 : 6);
+    const int button_x = x0 + 6;
+    draw_confirmation_button(
+        button_x,
+        first_button_y,
+        button_w,
+        button_h,
+        confirmation.cancel_label.empty() ? "Cancel" : confirmation.cancel_label,
+        !confirmation.confirm_selected);
+    draw_confirmation_button(
+        button_x,
+        first_button_y + button_h + button_gap,
+        button_w,
+        button_h,
+        confirmation.confirm_label.empty() ? "Remove" : confirmation.confirm_label,
+        confirmation.confirm_selected);
 }
 
 void draw_page(const UiSnapshot& snapshot, const std::string& layout) {
@@ -888,6 +1076,7 @@ public:
         waveshare_display_prepare_frame(config_.model.c_str(), framebuffer_.data(), config_.rotation);
         const auto resolved_layout = resolve_page_layout(snapshot, effective_layout_);
         draw_page(snapshot, resolved_layout);
+        draw_confirmation_popup(snapshot);
         waveshare_display_present(config_.model.c_str(), framebuffer_.data());
     }
 

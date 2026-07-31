@@ -5,17 +5,13 @@
 #include "raptor_ui/ipc.hpp"
 #include "raptor_ui/page_controller.hpp"
 #include "raptor_ui/ui_runtime.hpp"
+#include "raptor_ui/view.hpp"
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -31,180 +27,6 @@ struct DisplayRuntime {
     std::chrono::steady_clock::time_point next_render;
 };
 
-bool page_supported_by_display(const PageConfig& page, const DisplayConfig& display) {
-    return page.allowed_models.empty() ||
-           std::find(page.allowed_models.begin(), page.allowed_models.end(), display.model) != page.allowed_models.end();
-}
-
-const PageConfig* find_page_for_display_by_type(const PageController& controller,
-                                                const std::string& display_id,
-                                                const std::string& page_type) {
-    const auto* disp = controller.display(display_id);
-    if (disp == nullptr) {
-        return nullptr;
-    }
-    for (const auto& page : controller.pages()) {
-        if (page.type == page_type && page_supported_by_display(page, *disp)) {
-            return &page;
-        }
-    }
-    return nullptr;
-}
-
-void apply_page(UiSnapshot& snapshot, const PageConfig& page) {
-    snapshot.page_id = page.id;
-    snapshot.page_type = page.type;
-    snapshot.page_title = page.title;
-    snapshot.page_variant = page.default_variant;
-    snapshot.page_image_path = page.image.path;
-    snapshot.page_image_x = page.image.x;
-    snapshot.page_image_y = page.image.y;
-}
-
-void apply_context_fallback_page(UiSnapshot& snapshot, const std::string& context) {
-    snapshot.page_id = "context_" + context;
-    snapshot.page_type = context;
-    snapshot.page_title = context == "song"
-        ? "Song"
-        : (context == "track" ? "Track" : (context == "chords" ? "Chords" : "Settings"));
-    snapshot.page_variant = "square";
-    snapshot.page_image_path.clear();
-    snapshot.page_image_x = 0;
-    snapshot.page_image_y = 0;
-}
-
-std::string normalize_transport(std::string_view transport) {
-    std::string normalized;
-    normalized.reserve(transport.size());
-    for (const unsigned char c : transport) {
-        normalized.push_back(static_cast<char>(std::tolower(c)));
-    }
-    return normalized;
-}
-
-enum class TransportOverlay {
-    None,
-    Playing,
-    Recording,
-};
-
-TransportOverlay overlay_for_transport(std::string_view normalized_transport) {
-    if (normalized_transport == "recording") {
-        return TransportOverlay::Recording;
-    }
-    if (normalized_transport == "playing") {
-        return TransportOverlay::Playing;
-    }
-    return TransportOverlay::None;
-}
-
-const char* overlay_name(TransportOverlay overlay) {
-    switch (overlay) {
-        case TransportOverlay::Playing:
-            return "playing";
-        case TransportOverlay::Recording:
-            return "recording";
-        default:
-            return "none";
-    }
-}
-
-const char* overlay_page_type(TransportOverlay overlay) {
-    switch (overlay) {
-        case TransportOverlay::Playing:
-            return "playing";
-        case TransportOverlay::Recording:
-            return "recording";
-        default:
-            return "";
-    }
-}
-
-[[maybe_unused]] void maybe_override_transport_page(UiSnapshot& snapshot, const PageController& controller) {
-    // During active transport states we can override the assigned page with dedicated
-    // transport pages (playing/recording). When transport returns to stopped, assignment
-    // is restored by apply_page_assignment() in the next loop iteration.
-    const std::string normalized_transport = normalize_transport(snapshot.sequencer.transport);
-    const TransportOverlay overlay = overlay_for_transport(normalized_transport);
-
-    static std::unordered_map<std::string, TransportOverlay> last_overlay_by_display;
-    const auto last_it = last_overlay_by_display.find(snapshot.display_id);
-    const TransportOverlay last_overlay = (last_it == last_overlay_by_display.end()) ? TransportOverlay::None : last_it->second;
-    if (last_overlay != overlay) {
-        spdlog::debug(
-            "ui transport-state display={} transport_raw='{}' normalized='{}' overlay={}",
-            snapshot.display_id,
-            snapshot.sequencer.transport,
-            normalized_transport,
-            overlay_name(overlay));
-        last_overlay_by_display[snapshot.display_id] = overlay;
-    }
-
-    if (overlay == TransportOverlay::None) {
-        return;
-    }
-
-    const std::string page_type = overlay_page_type(overlay);
-    const auto* transport_page = find_page_for_display_by_type(controller, snapshot.display_id, page_type);
-    if (transport_page == nullptr) {
-        static std::unordered_map<std::string, std::uint64_t> missing_transport_page_counts;
-        auto& count = missing_transport_page_counts[snapshot.display_id + "|" + page_type];
-        ++count;
-        if (count == 1 || (count % 100) == 0) {
-            spdlog::warn(
-                "ui {}-page missing display={} model={} transport_raw='{}' misses={}",
-                page_type,
-                snapshot.display_id,
-                snapshot.display_model,
-                snapshot.sequencer.transport,
-                count);
-        }
-        return;
-    }
-
-    if (snapshot.page_id != transport_page->id) {
-        spdlog::trace(
-            "ui page override display={} from={}({}) to={}({}) transport_raw='{}'",
-            snapshot.display_id,
-            snapshot.page_id,
-            snapshot.page_type,
-            transport_page->id,
-            transport_page->type,
-            snapshot.sequencer.transport);
-    }
-
-    apply_page(snapshot, *transport_page);
-}
-
-void maybe_apply_context_page(UiSnapshot& snapshot, const PageController& controller) {
-    const std::string& context = snapshot.sequencer.input_context;
-    if (context != "song" && context != "track" && context != "settings" && context != "chords") {
-        return;
-    }
-    if (snapshot.page_type == context) {
-        return;
-    }
-
-    const auto* context_page = find_page_for_display_by_type(controller, snapshot.display_id, context);
-    if (context_page == nullptr) {
-        static std::unordered_map<std::string, std::uint64_t> missing_context_page_counts;
-        auto& count = missing_context_page_counts[snapshot.display_id + "|" + context];
-        ++count;
-        if (count == 1 || (count % 100) == 0) {
-            spdlog::warn(
-                "ui context page missing display={} model={} context={} misses={}",
-                snapshot.display_id,
-                snapshot.display_model,
-                context,
-                count);
-        }
-        apply_context_fallback_page(snapshot, context);
-        return;
-    }
-
-    apply_page(snapshot, *context_page);
-}
-
 }  // namespace
 
 Application::Application(ServiceConfig config) : config_(std::move(config)) {}
@@ -219,6 +41,7 @@ int Application::run() {
             config_.ipc.sequencer_control_endpoint);
 
         auto page_controller = std::make_shared<PageController>(config_);
+        ViewRegistry view_registry;
         spdlog::info("ui active scene at startup={}", page_controller->active_scene_id());
 
         std::vector<DisplayRuntime> displays;
@@ -318,7 +141,7 @@ int Application::run() {
 
             for (auto& display : displays) {
                 apply_page_assignment(display.snapshot, *page_controller);
-                maybe_apply_context_page(display.snapshot, *page_controller);
+                view_registry.apply_active_view(display.snapshot, *page_controller);
                 if (now >= display.next_render) {
                     ++display.snapshot.render_count;
                     spdlog::trace(
