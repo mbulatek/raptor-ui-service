@@ -16,6 +16,13 @@ struct MidiEventSummary {
     std::uint64_t timestamp_ns {0};
 };
 
+struct SequencerControllerLaneSummary {
+    std::string key;
+    std::string label;
+    bool muted {false};
+    std::uint32_t event_count {0};
+};
+
 struct SequencerTrackSummary {
     std::string id;
     std::string name;
@@ -27,6 +34,7 @@ struct SequencerTrackSummary {
     int midi_channel_in {-1};   // 0..16, -1 unknown
     int midi_channel_out {-1};  // 1..16, -1 unknown
     bool send_sync_enabled {false};
+    std::vector<SequencerControllerLaneSummary> controller_lanes;
 };
 
 struct SequencerSongSummary {
@@ -36,6 +44,16 @@ struct SequencerSongSummary {
     int slot {-1};
     std::string active_track_id;
     std::vector<SequencerTrackSummary> tracks;
+};
+
+struct UiConfirmationSummary {
+    bool active {false};
+    std::string kind;
+    std::string title;
+    std::string message;
+    std::string confirm_label {"Remove"};
+    std::string cancel_label {"Cancel"};
+    bool confirm_selected {false};
 };
 
 struct UpstreamStatus {
@@ -55,11 +73,15 @@ struct UpstreamStatus {
     std::string active_pattern;
     std::string input_context {"song"};
     std::uint32_t ui_scroll_offset {0};
+    std::uint32_t ui_page_offset {0};
     bool ui_editing {false};
+    UiConfirmationSummary ui_confirmation;
     std::string clock_source;
     std::string clock_midi_source;
     bool metronome_enabled {false};
     std::string metronome_alsa_device;
+    std::uint32_t chord_pad_right_hand_octave {4};
+    std::vector<bool> chord_pad_pressed = std::vector<bool>(8, false);
     std::optional<std::uint32_t> active_step;
 
     std::optional<std::uint32_t> bar;
@@ -90,6 +112,9 @@ struct UiSnapshot {
     std::string page_image_path;
     std::uint16_t page_image_x {0};
     std::uint16_t page_image_y {0};
+    std::string view_id;
+    std::uint32_t view_page_index {0};
+    std::uint32_t view_page_count {0};
     std::uint16_t display_width {0};
     std::uint16_t display_height {0};
     std::uint64_t render_count {0};

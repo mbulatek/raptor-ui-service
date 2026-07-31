@@ -40,6 +40,31 @@ json midi_json(const MidiEventSummary& midi) {
     };
 }
 
+json controller_lanes_json(const std::vector<SequencerControllerLaneSummary>& lanes) {
+    json out = json::array();
+    for (const auto& lane : lanes) {
+        out.push_back({
+            {"key", lane.key},
+            {"label", lane.label},
+            {"muted", lane.muted},
+            {"event_count", lane.event_count},
+        });
+    }
+    return out;
+}
+
+json ui_confirmation_json(const UiConfirmationSummary& confirmation) {
+    return {
+        {"active", confirmation.active},
+        {"kind", confirmation.kind},
+        {"title", confirmation.title},
+        {"message", confirmation.message},
+        {"confirm_label", confirmation.confirm_label},
+        {"cancel_label", confirmation.cancel_label},
+        {"confirm_selected", confirmation.confirm_selected},
+    };
+}
+
 json sequencer_json(const UpstreamStatus& status) {
     json j = {
         {"reachable", status.reachable},
@@ -50,6 +75,14 @@ json sequencer_json(const UpstreamStatus& status) {
     if (!status.transport.empty()) {
         j["transport"] = status.transport;
     }
+    if (!status.input_context.empty()) {
+        j["input_context"] = status.input_context;
+    }
+    j["ui_scroll_offset"] = status.ui_scroll_offset;
+    j["ui_page_offset"] = status.ui_page_offset;
+    j["ui_editing"] = status.ui_editing;
+    j["ui_confirmation"] = ui_confirmation_json(status.ui_confirmation);
+    j["chord_pad_right_hand_octave"] = status.chord_pad_right_hand_octave;
     if (!status.recording_quantize.empty()) {
         j["recording_quantize"] = status.recording_quantize;
     }
@@ -70,6 +103,7 @@ json sequencer_json(const UpstreamStatus& status) {
                 {"midi_channel_in", track.midi_channel_in},
                 {"midi_channel_out", track.midi_channel_out},
                 {"send_sync_enabled", track.send_sync_enabled},
+                {"controller_lanes", controller_lanes_json(track.controller_lanes)},
             });
         }
         j["song"] = {
@@ -95,6 +129,9 @@ json ui_json(const UiSnapshot& ui) {
         {"page_image_path", ui.page_image_path},
         {"page_image_x", ui.page_image_x},
         {"page_image_y", ui.page_image_y},
+        {"view_id", ui.view_id},
+        {"view_page_index", ui.view_page_index},
+        {"view_page_count", ui.view_page_count},
         {"display_width", ui.display_width},
         {"display_height", ui.display_height},
         {"render_count", ui.render_count},

@@ -1,10 +1,13 @@
 ﻿#include "raptor_ui/ipc.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -50,6 +53,31 @@ json midi_json(const MidiEventSummary& midi) {
     };
 }
 
+json controller_lanes_json(const std::vector<SequencerControllerLaneSummary>& lanes) {
+    json out = json::array();
+    for (const auto& lane : lanes) {
+        out.push_back({
+            {"key", lane.key},
+            {"label", lane.label},
+            {"muted", lane.muted},
+            {"event_count", lane.event_count},
+        });
+    }
+    return out;
+}
+
+json ui_confirmation_json(const UiConfirmationSummary& confirmation) {
+    return {
+        {"active", confirmation.active},
+        {"kind", confirmation.kind},
+        {"title", confirmation.title},
+        {"message", confirmation.message},
+        {"confirm_label", confirmation.confirm_label},
+        {"cancel_label", confirmation.cancel_label},
+        {"confirm_selected", confirmation.confirm_selected},
+    };
+}
+
 json sequencer_json(const UpstreamStatus& status) {
     json j = {
         {"reachable", status.reachable},
@@ -76,7 +104,9 @@ json sequencer_json(const UpstreamStatus& status) {
         j["input_context"] = status.input_context;
     }
     j["ui_scroll_offset"] = status.ui_scroll_offset;
+    j["ui_page_offset"] = status.ui_page_offset;
     j["ui_editing"] = status.ui_editing;
+    j["ui_confirmation"] = ui_confirmation_json(status.ui_confirmation);
     if (!status.clock_source.empty()) {
         j["clock_source"] = status.clock_source;
     }
@@ -87,6 +117,8 @@ json sequencer_json(const UpstreamStatus& status) {
     if (!status.metronome_alsa_device.empty()) {
         j["metronome_alsa_device"] = status.metronome_alsa_device;
     }
+    j["chord_pad_right_hand_octave"] = status.chord_pad_right_hand_octave;
+    j["chord_pad_pressed"] = status.chord_pad_pressed;
     if (status.active_step.has_value()) {
         j["active_step"] = *status.active_step;
     }
@@ -140,6 +172,7 @@ json sequencer_json(const UpstreamStatus& status) {
                 {"midi_channel_in", track.midi_channel_in},
                 {"midi_channel_out", track.midi_channel_out},
                 {"send_sync_enabled", track.send_sync_enabled},
+                {"controller_lanes", controller_lanes_json(track.controller_lanes)},
             });
         }
         j["song"] = {
@@ -178,6 +211,12 @@ json snapshot_json(const UiSnapshot& snapshot) {
              {"image_path", snapshot.page_image_path},
              {"image_x", snapshot.page_image_x},
              {"image_y", snapshot.page_image_y},
+         }},
+        {"view",
+         {
+             {"id", snapshot.view_id},
+             {"page_index", snapshot.view_page_index},
+             {"page_count", snapshot.view_page_count},
          }},
         {"render_count", snapshot.render_count},
         {"last_midi", midi_json(snapshot.last_midi)},
@@ -303,6 +342,182 @@ std::string midi_label_for(
     return {};
 }
 
+bool is_channel_midi_status(const int status) {
+    return status >= 0x80 && status <= 0xEF;
+}
+
+bool is_controller_lane_event(const json& event) {
+    if (!event.is_object()) {
+        return false;
+    }
+    const int size = event.value("size", 0);
+    const int status = event.value("status", 0);
+    if (size == 0 || !is_channel_midi_status(status)) {
+        return false;
+    }
+    const int kind = status & 0xF0;
+    return kind == 0xA0 || kind == 0xB0 || kind == 0xC0 || kind == 0xD0 || kind == 0xE0;
+}
+
+std::string controller_lane_key(const json& event) {
+    const int status = event.value("status", 0);
+    const int kind = status & 0xF0;
+    const int data1 = std::clamp(event.value("data1", 0), 0, 127);
+    switch (kind) {
+    case 0xA0:
+        return "polyaftertouch:" + std::to_string(data1);
+    case 0xB0:
+        return "cc:" + std::to_string(data1);
+    case 0xC0:
+        return "program";
+    case 0xD0:
+        return "aftertouch";
+    case 0xE0:
+        return "pitchbend";
+    default:
+        return {};
+    }
+}
+
+std::optional<int> parse_lane_number_suffix(const std::string& key, const std::string_view prefix) {
+    if (!key.starts_with(prefix)) {
+        return std::nullopt;
+    }
+    try {
+        std::size_t pos = 0;
+        const int value = std::stoi(key.substr(prefix.size()), &pos, 10);
+        if (pos == key.size() - prefix.size()) {
+            return value;
+        }
+    } catch (const std::exception&) {
+    }
+    return std::nullopt;
+}
+
+std::string controller_lane_label(const std::string& key) {
+    if (const auto number = parse_lane_number_suffix(key, "cc:")) {
+        return "CC " + std::to_string(*number);
+    }
+    if (const auto number = parse_lane_number_suffix(key, "polyaftertouch:")) {
+        return "Poly AT " + std::to_string(*number);
+    }
+    if (key == "pitchbend") {
+        return "Pitch Bend";
+    }
+    if (key == "aftertouch") {
+        return "Aftertouch";
+    }
+    if (key == "program") {
+        return "Program";
+    }
+    return key.empty() ? std::string {"Unknown"} : key;
+}
+
+int controller_lane_sort_rank(const std::string& key) {
+    if (key.starts_with("cc:")) return 0;
+    if (key.starts_with("polyaftertouch:")) return 1;
+    if (key == "pitchbend") return 2;
+    if (key == "aftertouch") return 3;
+    if (key == "program") return 4;
+    return 5;
+}
+
+bool controller_lane_less(const SequencerControllerLaneSummary& left, const SequencerControllerLaneSummary& right) {
+    const int left_rank = controller_lane_sort_rank(left.key);
+    const int right_rank = controller_lane_sort_rank(right.key);
+    if (left_rank != right_rank) {
+        return left_rank < right_rank;
+    }
+    const auto left_cc = parse_lane_number_suffix(left.key, "cc:");
+    const auto right_cc = parse_lane_number_suffix(right.key, "cc:");
+    if (left_cc.has_value() && right_cc.has_value() && *left_cc != *right_cc) {
+        return *left_cc < *right_cc;
+    }
+    const auto left_poly = parse_lane_number_suffix(left.key, "polyaftertouch:");
+    const auto right_poly = parse_lane_number_suffix(right.key, "polyaftertouch:");
+    if (left_poly.has_value() && right_poly.has_value() && *left_poly != *right_poly) {
+        return *left_poly < *right_poly;
+    }
+    return left.key < right.key;
+}
+
+void add_controller_lane(std::vector<SequencerControllerLaneSummary>& lanes,
+                         const std::string& key,
+                         const bool muted,
+                         const std::uint32_t events) {
+    if (key.empty()) {
+        return;
+    }
+    auto it = std::find_if(lanes.begin(), lanes.end(), [&](const SequencerControllerLaneSummary& lane) {
+        return lane.key == key;
+    });
+    if (it == lanes.end()) {
+        lanes.push_back(SequencerControllerLaneSummary {
+            .key = key,
+            .label = controller_lane_label(key),
+            .muted = muted,
+            .event_count = events,
+        });
+        return;
+    }
+    it->muted = it->muted || muted;
+    it->event_count += events;
+}
+
+const json* find_pattern_json(const json& project_json, const std::string& pattern_id) {
+    if (pattern_id.empty() || !project_json.contains("patterns") || !project_json["patterns"].is_array()) {
+        return nullptr;
+    }
+    for (const auto& pattern : project_json["patterns"]) {
+        if (pattern.is_object() && pattern.value("id", std::string{}) == pattern_id) {
+            return &pattern;
+        }
+    }
+    return nullptr;
+}
+
+std::vector<SequencerControllerLaneSummary> parse_controller_lanes_from_track(const json& project_json, const json& track_json) {
+    std::vector<SequencerControllerLaneSummary> lanes;
+    std::unordered_set<std::string> muted_lanes;
+    if (track_json.contains("automation_muted_lanes") && track_json["automation_muted_lanes"].is_array()) {
+        for (const auto& lane : track_json["automation_muted_lanes"]) {
+            if (!lane.is_string()) {
+                continue;
+            }
+            const std::string key = lane.get<std::string>();
+            muted_lanes.insert(key);
+            add_controller_lane(lanes, key, true, 0U);
+        }
+    }
+
+    std::unordered_set<std::string> pattern_ids;
+    if (track_json.contains("clips") && track_json["clips"].is_array()) {
+        for (const auto& clip : track_json["clips"]) {
+            if (clip.is_object()) {
+                const std::string pattern_id = clip.value("pattern_id", std::string{});
+                if (!pattern_id.empty()) {
+                    pattern_ids.insert(pattern_id);
+                }
+            }
+        }
+    }
+    for (const std::string& pattern_id : pattern_ids) {
+        const json* pattern = find_pattern_json(project_json, pattern_id);
+        if (pattern == nullptr || !pattern->contains("events") || !(*pattern)["events"].is_array()) {
+            continue;
+        }
+        for (const auto& event : (*pattern)["events"]) {
+            if (!is_controller_lane_event(event)) {
+                continue;
+            }
+            const std::string key = controller_lane_key(event);
+            add_controller_lane(lanes, key, muted_lanes.contains(key), 1U);
+        }
+    }
+    std::sort(lanes.begin(), lanes.end(), controller_lane_less);
+    return lanes;
+}
+
 SequencerSongSummary parse_song_summary_from_project(const json& project_json) {
     SequencerSongSummary song;
     if (!project_json.is_object()) {
@@ -351,6 +566,7 @@ SequencerSongSummary parse_song_summary_from_project(const json& project_json) {
             } else if (t.contains("midi_channel")) {
                 track.midi_channel_out = t.value("midi_channel", -1);
             }
+            track.controller_lanes = parse_controller_lanes_from_track(project_json, t);
             song.tracks.push_back(std::move(track));
         }
     }
@@ -586,11 +802,38 @@ std::optional<UpstreamStatus> ControlClient::query_status(const std::string& req
             status.active_pattern = snap.value("active_pattern", "");
             status.input_context = snap.value("input_context", std::string{"song"});
             status.ui_scroll_offset = snap.value("ui_scroll_offset", static_cast<std::uint32_t>(0));
+            status.ui_page_offset = snap.value("ui_page_offset", static_cast<std::uint32_t>(0));
             status.ui_editing = snap.value("ui_editing", false);
+            if (snap.contains("ui_confirmation") && snap["ui_confirmation"].is_object()) {
+                const auto& confirmation = snap["ui_confirmation"];
+                status.ui_confirmation.active = confirmation.value("active", false);
+                status.ui_confirmation.kind = confirmation.value("kind", std::string{});
+                status.ui_confirmation.title = confirmation.value("title", std::string{});
+                status.ui_confirmation.message = confirmation.value("message", std::string{});
+                status.ui_confirmation.confirm_label = confirmation.value("confirm_label", std::string{"Remove"});
+                status.ui_confirmation.cancel_label = confirmation.value("cancel_label", std::string{"Cancel"});
+                status.ui_confirmation.confirm_selected = confirmation.value("confirm_selected", false);
+            }
             status.clock_source = snap.value("clock_source", std::string{});
             status.clock_midi_source = snap.value("clock_midi_source", std::string{});
             status.metronome_enabled = snap.value("metronome_enabled", false);
             status.metronome_alsa_device = snap.value("metronome_alsa_device", std::string{});
+            if (snap.contains("chords_pad") && snap["chords_pad"].is_object()) {
+                const auto& chords = snap["chords_pad"];
+                status.chord_pad_right_hand_octave = std::clamp<std::uint32_t>(
+                    chords.value("right_hand_octave", static_cast<std::uint32_t>(4)),
+                    0U,
+                    8U);
+            }
+            if (snap.contains("chord_pad_pressed") && snap["chord_pad_pressed"].is_array()) {
+                status.chord_pad_pressed.assign(8, false);
+                const auto& pads = snap["chord_pad_pressed"];
+                for (std::size_t index = 0; index < pads.size() && index < status.chord_pad_pressed.size(); ++index) {
+                    if (pads[index].is_boolean()) {
+                        status.chord_pad_pressed[index] = pads[index].get<bool>();
+                    }
+                }
+            }
             status.song.id = snap.value("current_song_id", std::string{});
             status.song.title = snap.value("current_song_title", std::string{});
             status.song.slot = snap.value("current_song_slot", -1);

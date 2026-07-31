@@ -72,6 +72,7 @@ add_library(raptor_ui_core
     src/logger.cpp
     src/page_controller.cpp
     src/ui_runtime.cpp
+    src/view.cpp
 )
 
 target_include_directories(raptor_ui_core

@@ -96,19 +96,25 @@ pages:
     type: song
     title: Song
     allowed_models: [oled_1in5_b]
-    default_variant: song_tracks
+    default_variant: song_overview
 
-  - id: perf_song_io_main
+  - id: perf_song_tracks_main
     type: song
     title: Song
     allowed_models: [oled_1in5_b]
-    default_variant: song_io
+    default_variant: song_tracks
 
   - id: perf_track_main
     type: track
     title: Track
     allowed_models: [oled_1in5_b]
     default_variant: square
+
+  - id: perf_track_controllers_main
+    type: track
+    title: Track
+    allowed_models: [oled_1in5_b]
+    default_variant: controller_lanes
 
   - id: perf_settings_main
     type: settings
@@ -118,7 +124,7 @@ pages:
 
   - id: perf_chords_main
     type: chords
-    title: Chords
+    title: Chords pad
     allowed_models: [oled_1in5_b]
     default_variant: square
 
