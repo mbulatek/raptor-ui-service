@@ -550,11 +550,11 @@ void draw_song_page(const UiSnapshot& snapshot, const std::string& /*layout*/) {
         };
         const std::size_t selected = fields.empty()
             ? 0U
-            : static_cast<std::size_t>(snapshot.sequencer.ui_scroll_offset % fields.size());
+            : static_cast<std::size_t>(snapshot.sequencer.presentation.focus_index % fields.size());
         draw_editable_field_rows(
             fields,
             selected,
-            snapshot.sequencer.ui_editing,
+            snapshot.sequencer.presentation.editing,
             false,
             58U,
             snapshot.render_count);
@@ -569,7 +569,7 @@ void draw_song_page(const UiSnapshot& snapshot, const std::string& /*layout*/) {
     const std::size_t max_rows = 7;
     std::size_t selected = snapshot.sequencer.song.tracks.empty()
         ? 0U
-        : static_cast<std::size_t>(snapshot.sequencer.ui_scroll_offset % snapshot.sequencer.song.tracks.size());
+        : static_cast<std::size_t>(snapshot.sequencer.presentation.focus_index % snapshot.sequencer.song.tracks.size());
     if (!snapshot.sequencer.song.active_track_id.empty()) {
         for (std::size_t i = 0; i < snapshot.sequencer.song.tracks.size(); ++i) {
             if (snapshot.sequencer.song.tracks[i].id == snapshot.sequencer.song.active_track_id) {
@@ -620,7 +620,7 @@ void draw_track_page(const UiSnapshot& snapshot, const std::string& layout) {
 
         const auto& lanes = track->controller_lanes;
         const std::size_t max_rows = layout == "compact" || snapshot.display_height <= 64 ? 3U : 7U;
-        const std::size_t selected = static_cast<std::size_t>(snapshot.sequencer.ui_scroll_offset % lanes.size());
+        const std::size_t selected = static_cast<std::size_t>(snapshot.sequencer.presentation.focus_index % lanes.size());
         const std::size_t first = scroll_start_index(static_cast<std::uint32_t>(selected), lanes.size(), max_rows);
         if (lanes.size() > max_rows) {
             char pos[32];
@@ -680,11 +680,11 @@ void draw_track_page(const UiSnapshot& snapshot, const std::string& layout) {
     const bool compact = layout == "compact" || snapshot.display_height <= 64;
     const std::size_t selected = fields.empty()
         ? 0U
-        : static_cast<std::size_t>(snapshot.sequencer.ui_scroll_offset % fields.size());
+        : static_cast<std::size_t>(snapshot.sequencer.presentation.focus_index % fields.size());
     draw_editable_field_rows(
         fields,
         selected,
-        snapshot.sequencer.ui_editing,
+        snapshot.sequencer.presentation.editing,
         compact,
         compact ? 34U : 45U,
         snapshot.render_count);
@@ -718,11 +718,11 @@ void draw_settings_page(const UiSnapshot& snapshot, const std::string& layout) {
     const bool compact = snapshot.display_height <= 64;
     const std::size_t selected = fields.empty()
         ? 0U
-        : static_cast<std::size_t>(snapshot.sequencer.ui_scroll_offset % fields.size());
+        : static_cast<std::size_t>(snapshot.sequencer.presentation.focus_index % fields.size());
     draw_editable_field_rows(
         fields,
         selected,
-        snapshot.sequencer.ui_editing,
+        snapshot.sequencer.presentation.editing,
         compact,
         compact ? 40U : 50U,
         snapshot.render_count);
@@ -950,7 +950,7 @@ void draw_confirmation_button(const int x,
 }
 
 void draw_confirmation_popup(const UiSnapshot& snapshot) {
-    const auto& confirmation = snapshot.sequencer.ui_confirmation;
+    const auto& confirmation = snapshot.sequencer.presentation.confirmation;
     if (!confirmation.active) {
         return;
     }

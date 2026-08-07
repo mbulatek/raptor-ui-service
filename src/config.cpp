@@ -46,6 +46,7 @@ void load_global_ipc_overrides(const std::string& path, IpcConfig& ipc) {
             assign_if_present(midi_io, "control_endpoint", ipc.midi_control_endpoint);
         }
         if (const auto seq = ipc_root["seq"]) {
+            assign_if_present(seq, "events_endpoint", ipc.sequencer_events_endpoint);
             assign_if_present(seq, "control_endpoint", ipc.sequencer_control_endpoint);
         }
     }
@@ -245,6 +246,7 @@ void validate_config(ServiceConfig& config) {
     }
     if (config.ipc.ui_events_endpoint.empty() ||
         config.ipc.ui_control_endpoint.empty() ||
+        config.ipc.sequencer_events_endpoint.empty() ||
         config.ipc.sequencer_control_endpoint.empty()) {
         throw std::runtime_error("IPC endpoints must not be empty");
     }
@@ -366,6 +368,7 @@ ServiceConfig load_config(const std::string& path) {
         assign_if_present(ipc, "ui_control_endpoint", config.ipc.ui_control_endpoint);
         assign_if_present(ipc, "midi_events_endpoint", config.ipc.midi_events_endpoint);
         assign_if_present(ipc, "midi_control_endpoint", config.ipc.midi_control_endpoint);
+        assign_if_present(ipc, "sequencer_events_endpoint", config.ipc.sequencer_events_endpoint);
         assign_if_present(ipc, "sequencer_control_endpoint", config.ipc.sequencer_control_endpoint);
     }
 

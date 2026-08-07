@@ -68,6 +68,7 @@ int Application::run() {
         }
 
         EventPublisher publisher {config_.ipc.ui_events_endpoint, "ui.snapshot"};
+        SequencerEventSubscriber sequencer_events {config_.ipc.sequencer_events_endpoint};
         ControlClient sequencer_client {config_.ipc.sequencer_control_endpoint};
         ControlServer control_server {config_.ipc.ui_control_endpoint, config_, page_controller};
 
@@ -75,87 +76,135 @@ int Application::run() {
         service_snapshot.ui_events_endpoint = config_.ipc.ui_events_endpoint;
         service_snapshot.ui_control_endpoint = config_.ipc.ui_control_endpoint;
 
-        auto next_sequencer_poll = std::chrono::steady_clock::now();
-        auto next_project_poll = std::chrono::steady_clock::now();
+        UpstreamStatus sequencer_status;
+        sequencer_status.service = "raptor-engine";
+        sequencer_status.summary = "waiting for initial state";
+        bool sequencer_hydrated = false;
+        auto next_hydration_attempt = std::chrono::steady_clock::now();
+        auto next_project_fetch = std::chrono::steady_clock::now();
         std::optional<SequencerSongSummary> cached_song_summary;
         std::optional<std::uint64_t> cached_song_revision;
 
-        while (true) {
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= next_sequencer_poll) {
-                const auto status = sequencer_client.query_status("ui-service-sequencer-status");
-                if (status.has_value()) {
-                    const bool song_changed =
-                        status->song_revision.has_value() &&
-                        (!cached_song_revision.has_value() || *cached_song_revision != *status->song_revision);
-                    if (song_changed || now >= next_project_poll) {
-                        if (song_changed) {
-                            cached_song_summary.reset();
-                            cached_song_revision.reset();
-                        }
-                        const auto project = sequencer_client.query_project("ui-service-sequencer-project");
-                        if (project.has_value()) {
-                            cached_song_summary = std::move(project);
-                            if (status->song_revision.has_value()) {
-                                cached_song_revision = *status->song_revision;
-                            }
-                        }
-                        next_project_poll = now + std::chrono::milliseconds(song_changed ? 100 : 1000);
-                    }
+        const auto merged_sequencer_status = [&]() {
+            auto merged = sequencer_status;
+            if (cached_song_summary.has_value()) {
+                merged.song = *cached_song_summary;
+                if (!sequencer_status.song.id.empty()) {
+                    merged.song.id = sequencer_status.song.id;
                 }
-                for (auto& display : displays) {
-                    if (status.has_value()) {
-                        auto merged = *status;
-                        if (cached_song_summary.has_value()) {
-                            merged.song = *cached_song_summary;
-                            if (!status->song.id.empty()) {
-                                merged.song.id = status->song.id;
-                            }
-                            if (!status->song.title.empty()) {
-                                merged.song.title = status->song.title;
-                            }
-                            if (status->song.slot > 0) {
-                                merged.song.slot = status->song.slot;
-                            }
-                            if (!status->song.active_track_id.empty()) {
-                                merged.song.active_track_id = status->song.active_track_id;
-                            }
-                        }
-                        if (display.snapshot.sequencer.transport != status->transport) {
-                            spdlog::debug(
-                                "ui sequencer transport update display={} {} -> {}",
-                                display.snapshot.display_id,
-                                display.snapshot.sequencer.transport,
-                                status->transport);
-                        }
-                        display.snapshot.sequencer = std::move(merged);
-                    } else {
-                        display.snapshot.sequencer.reachable = false;
-                        display.snapshot.sequencer.service = "raptor-sequencer";
-                        display.snapshot.sequencer.summary = "unreachable";
-                        display.snapshot.sequencer.timestamp_ns = 0;
-                    }
+                if (!sequencer_status.song.title.empty()) {
+                    merged.song.title = sequencer_status.song.title;
                 }
-                next_sequencer_poll = now + std::chrono::milliseconds(250);
+                if (sequencer_status.song.slot > 0) {
+                    merged.song.slot = sequencer_status.song.slot;
+                }
+                if (!sequencer_status.song.active_track_id.empty()) {
+                    merged.song.active_track_id = sequencer_status.song.active_track_id;
+                }
             }
+            return merged;
+        };
 
+        const auto update_display_status = [&]() {
+            const auto merged = merged_sequencer_status();
+            for (auto& display : displays) {
+                display.snapshot.sequencer = merged;
+            }
+        };
+
+        const auto render_displays = [&](const std::chrono::steady_clock::time_point now, const bool force) {
             for (auto& display : displays) {
                 apply_page_assignment(display.snapshot, *page_controller);
                 view_registry.apply_active_view(display.snapshot, *page_controller);
-                if (now >= display.next_render) {
-                    ++display.snapshot.render_count;
-                    spdlog::trace(
-                        "ui render display={} page={} type={} variant={} count={}",
-                        display.snapshot.display_id,
-                        display.snapshot.page_id,
-                        display.snapshot.page_type,
-                        display.snapshot.page_variant,
-                        display.snapshot.render_count);
-                    display.backend->render(display.snapshot);
-                    publisher.publish_snapshot(display.snapshot);
-                    display.next_render = now + std::chrono::milliseconds(display.config->refresh_period_ms);
+                if (!force && now < display.next_render) {
+                    continue;
                 }
+                ++display.snapshot.render_count;
+                spdlog::trace(
+                    "ui render display={} page={} type={} variant={} count={}",
+                    display.snapshot.display_id,
+                    display.snapshot.page_id,
+                    display.snapshot.page_type,
+                    display.snapshot.page_variant,
+                    display.snapshot.render_count);
+                display.backend->render(display.snapshot);
+                publisher.publish_snapshot(display.snapshot);
+                display.next_render = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(display.config->refresh_period_ms);
             }
+        };
+
+        while (true) {
+            const auto now = std::chrono::steady_clock::now();
+            bool state_changed = false;
+            bool project_refreshed = false;
+
+            // Render every semantic state transition before consuming the next
+            // one so short press/release pairs remain visible on the display.
+            for (int event_count = 0; event_count < 32; ++event_count) {
+                bool semantic_state_changed = false;
+                if (!sequencer_events.poll_once(sequencer_status, semantic_state_changed)) {
+                    break;
+                }
+                if (!semantic_state_changed) {
+                    continue;
+                }
+
+                state_changed = true;
+                const bool project_changed =
+                    sequencer_status.song_revision.has_value() &&
+                    (!cached_song_revision.has_value() ||
+                     *sequencer_status.song_revision != *cached_song_revision);
+                if (project_changed) {
+                    // Keep the last complete project visible while fetching a
+                    // newer revision. Only discard it when the song changed.
+                    const bool song_changed =
+                        cached_song_summary.has_value() &&
+                        !sequencer_status.song.id.empty() &&
+                        cached_song_summary->id != sequencer_status.song.id;
+                    if (song_changed) {
+                        cached_song_summary.reset();
+                        cached_song_revision.reset();
+                    }
+                    next_project_fetch = now;
+                }
+                update_display_status();
+                render_displays(std::chrono::steady_clock::now(), true);
+            }
+
+            if (!sequencer_hydrated && now >= next_hydration_attempt) {
+                const auto hydrated = sequencer_client.query_status("ui-service-initial-state");
+                if (hydrated.has_value()) {
+                    sequencer_status = *hydrated;
+                    sequencer_hydrated = true;
+                    state_changed = true;
+                } else {
+                    sequencer_status.reachable = false;
+                    sequencer_status.summary = "waiting for raptor-engine";
+                }
+                next_hydration_attempt = now + std::chrono::seconds(1);
+            }
+
+            const bool project_needs_refresh =
+                !cached_song_summary.has_value() ||
+                (sequencer_status.song_revision.has_value() &&
+                 (!cached_song_revision.has_value() ||
+                  *sequencer_status.song_revision != *cached_song_revision));
+            if (sequencer_status.reachable && project_needs_refresh && now >= next_project_fetch) {
+                const auto project = sequencer_client.query_project("ui-service-project-hydration");
+                if (project.has_value()) {
+                    cached_song_summary = *project;
+                    cached_song_revision = sequencer_status.song_revision;
+                    state_changed = true;
+                    project_refreshed = true;
+                }
+                next_project_fetch = now + std::chrono::seconds(1);
+            }
+
+            if (state_changed) {
+                update_display_status();
+            }
+            render_displays(now, project_refreshed);
 
             service_snapshot.displays.clear();
             for (const auto& display : displays) {
