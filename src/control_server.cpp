@@ -65,6 +65,18 @@ json ui_confirmation_json(const UiConfirmationSummary& confirmation) {
     };
 }
 
+json presentation_json(const PresentationSummary& presentation) {
+    return {
+        {"view", presentation.view},
+        {"page", presentation.page},
+        {"page_index", presentation.page_index},
+        {"page_count", presentation.page_count},
+        {"focus_index", presentation.focus_index},
+        {"editing", presentation.editing},
+        {"confirmation", ui_confirmation_json(presentation.confirmation)},
+    };
+}
+
 json sequencer_json(const UpstreamStatus& status) {
     json j = {
         {"reachable", status.reachable},
@@ -75,13 +87,7 @@ json sequencer_json(const UpstreamStatus& status) {
     if (!status.transport.empty()) {
         j["transport"] = status.transport;
     }
-    if (!status.input_context.empty()) {
-        j["input_context"] = status.input_context;
-    }
-    j["ui_scroll_offset"] = status.ui_scroll_offset;
-    j["ui_page_offset"] = status.ui_page_offset;
-    j["ui_editing"] = status.ui_editing;
-    j["ui_confirmation"] = ui_confirmation_json(status.ui_confirmation);
+    j["presentation"] = presentation_json(status.presentation);
     j["chord_pad_right_hand_octave"] = status.chord_pad_right_hand_octave;
     if (!status.recording_quantize.empty()) {
         j["recording_quantize"] = status.recording_quantize;

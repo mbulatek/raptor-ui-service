@@ -7,11 +7,16 @@
 The service is built around four concepts:
 
 - `display`: a physical screen with its own model, GPIO and SPI wiring
-- `page`: a logical UI screen such as `boot`, `transport`, `midi_monitor` or `status`
+- `page`: a renderer for a semantic page selected by `raptor-engine/session`
 - `layout`: a geometry-aware rendering variant chosen for the physical display
 - `assignment`: the current runtime binding between a display and a page
 
-This means pages are not hard-wired to a given display. If two displays are compatible with the same page, the page can be reassigned or swapped between them through the control API.
+Application navigation belongs to `raptor-engine`. It publishes a
+`presentation` containing stable identifiers such as `song.overview`,
+`song.tracks` or `track.controllers`. Native UI maps that page identifier to a
+compatible local renderer and never derives the active page from a numeric
+offset. Boot, diagnostics and auxiliary-display pages can still be assigned or
+swapped through the Native UI control API.
 
 ## Hardware backend
 
@@ -41,6 +46,12 @@ Supported page types in the current implementation:
 
 - `boot`
 - `transport`
+- `playing`
+- `recording`
+- `song`
+- `track`
+- `settings`
+- `chords`
 - `midi_monitor`
 - `status`
 
@@ -114,6 +125,11 @@ This lets you switch the whole UI personality with one control command instead o
 ## IPC
 
 The service mirrors the JSON + ZeroMQ style used by `raptor-engine`.
+
+At startup Native UI hydrates once from the sequencer control endpoint. Runtime
+state then arrives through `sequencer.state` and `sequencer.clock` on the
+sequencer event endpoint. Project details are fetched only when the published
+song revision changes.
 
 ### Published topics
 

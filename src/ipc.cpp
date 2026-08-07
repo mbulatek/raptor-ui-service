@@ -42,6 +42,102 @@ std::uint64_t monotonic_time_ns() {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
 }
 
+void apply_confirmation_json(const json& source, UiConfirmationSummary& target) {
+    target.active = source.value("active", false);
+    target.kind = source.value("kind", std::string {});
+    target.title = source.value("title", std::string {});
+    target.message = source.value("message", std::string {});
+    target.confirm_label = source.value("confirm_label", std::string {"Remove"});
+    target.cancel_label = source.value("cancel_label", std::string {"Cancel"});
+    target.confirm_selected = source.value("confirm_selected", false);
+}
+
+void apply_presentation_json(const json& source, PresentationSummary& target) {
+    target.view = source.value("view", target.view);
+    target.page = source.value("page", target.page);
+    target.page_index = source.value("page_index", target.page_index);
+    target.page_count = std::max<std::uint32_t>(1U, source.value("page_count", target.page_count));
+    target.focus_index = source.value("focus_index", target.focus_index);
+    target.editing = source.value("editing", target.editing);
+    if (source.contains("confirmation") && source["confirmation"].is_object()) {
+        apply_confirmation_json(source["confirmation"], target.confirmation);
+    }
+}
+
+void apply_sequencer_snapshot_json(const json& snap, UpstreamStatus& status) {
+    status.timestamp_ns = monotonic_time_ns();
+    if (snap.contains("service") && snap["service"].is_string()) {
+        status.service = snap["service"].get<std::string>();
+    }
+    if (snap.contains("tick")) status.tick = snap.value("tick", static_cast<std::uint64_t>(0));
+    if (snap.contains("revision_epoch")) {
+        status.revision_epoch = snap.value("revision_epoch", static_cast<std::uint64_t>(0));
+    }
+    if (snap.contains("song_revision")) {
+        status.song_revision = snap.value("song_revision", static_cast<std::uint64_t>(0));
+    }
+    if (snap.contains("pattern_revision")) {
+        status.pattern_revision = snap.value("pattern_revision", static_cast<std::uint64_t>(0));
+    }
+    if (snap.contains("bpm")) status.bpm = snap.value("bpm", 0.0);
+    if (snap.contains("ppqn")) status.ppqn = snap.value("ppqn", static_cast<std::uint32_t>(0));
+    if (snap.contains("transport")) status.transport = snap.value("transport", std::string {});
+    if (snap.contains("active_pattern")) status.active_pattern = snap.value("active_pattern", std::string {});
+    if (snap.contains("presentation") && snap["presentation"].is_object()) {
+        apply_presentation_json(snap["presentation"], status.presentation);
+    }
+    if (snap.contains("clock_source")) status.clock_source = snap.value("clock_source", std::string {});
+    if (snap.contains("clock_midi_source")) {
+        status.clock_midi_source = snap.value("clock_midi_source", std::string {});
+    }
+    if (snap.contains("metronome_enabled")) status.metronome_enabled = snap.value("metronome_enabled", false);
+    if (snap.contains("metronome_alsa_device")) {
+        status.metronome_alsa_device = snap.value("metronome_alsa_device", std::string {});
+    }
+    if (snap.contains("chords_pad") && snap["chords_pad"].is_object()) {
+        const auto& chords = snap["chords_pad"];
+        status.chord_pad_right_hand_octave = std::clamp<std::uint32_t>(
+            chords.value("right_hand_octave", static_cast<std::uint32_t>(4)),
+            0U,
+            8U);
+    }
+    if (snap.contains("chord_pad_pressed") && snap["chord_pad_pressed"].is_array()) {
+        status.chord_pad_pressed.assign(8, false);
+        const auto& pads = snap["chord_pad_pressed"];
+        for (std::size_t index = 0; index < pads.size() && index < status.chord_pad_pressed.size(); ++index) {
+            if (pads[index].is_boolean()) {
+                status.chord_pad_pressed[index] = pads[index].get<bool>();
+            }
+        }
+    }
+    if (snap.contains("current_song_id")) status.song.id = snap.value("current_song_id", std::string {});
+    if (snap.contains("current_song_title")) status.song.title = snap.value("current_song_title", std::string {});
+    if (snap.contains("current_song_slot")) status.song.slot = snap.value("current_song_slot", -1);
+    if (snap.contains("active_track_id")) {
+        status.song.active_track_id = snap.value("active_track_id", std::string {});
+    }
+    status.song.available = status.song.available || !status.song.id.empty() || !status.song.title.empty();
+    if (snap.contains("active_step")) status.active_step = snap.value("active_step", static_cast<std::uint32_t>(0));
+    if (snap.contains("bar")) status.bar = snap.value("bar", static_cast<std::uint32_t>(0));
+    if (snap.contains("bars_total")) status.bars_total = snap.value("bars_total", static_cast<std::uint32_t>(0));
+    if (snap.contains("beat")) status.beat = snap.value("beat", static_cast<std::uint32_t>(0));
+    if (snap.contains("beats_per_bar")) {
+        status.beats_per_bar = snap.value("beats_per_bar", static_cast<std::uint32_t>(0));
+    }
+    if (snap.contains("beat_unit")) status.beat_unit = snap.value("beat_unit", static_cast<std::uint32_t>(0));
+    if (snap.contains("active_clip_index")) {
+        status.active_clip_index = snap.value("active_clip_index", static_cast<std::uint32_t>(0));
+    }
+    if (snap.contains("midi_in_port")) status.midi_in_port = snap.value("midi_in_port", -1);
+    if (snap.contains("midi_in_channel")) status.midi_in_channel = snap.value("midi_in_channel", -1);
+    if (snap.contains("midi_out_port")) status.midi_out_port = snap.value("midi_out_port", -1);
+    if (snap.contains("midi_out_channel")) status.midi_out_channel = snap.value("midi_out_channel", -1);
+    if (snap.contains("recording_quantize")) {
+        status.recording_quantize = snap.value("recording_quantize", std::string {});
+    }
+    if (snap.contains("loop_quantize")) status.loop_quantize = snap.value("loop_quantize", std::string {});
+}
+
 json midi_json(const MidiEventSummary& midi) {
     return {
         {"available", midi.available},
@@ -78,6 +174,18 @@ json ui_confirmation_json(const UiConfirmationSummary& confirmation) {
     };
 }
 
+json presentation_json(const PresentationSummary& presentation) {
+    return {
+        {"view", presentation.view},
+        {"page", presentation.page},
+        {"page_index", presentation.page_index},
+        {"page_count", presentation.page_count},
+        {"focus_index", presentation.focus_index},
+        {"editing", presentation.editing},
+        {"confirmation", ui_confirmation_json(presentation.confirmation)},
+    };
+}
+
 json sequencer_json(const UpstreamStatus& status) {
     json j = {
         {"reachable", status.reachable},
@@ -100,13 +208,7 @@ json sequencer_json(const UpstreamStatus& status) {
     if (!status.active_pattern.empty()) {
         j["active_pattern"] = status.active_pattern;
     }
-    if (!status.input_context.empty()) {
-        j["input_context"] = status.input_context;
-    }
-    j["ui_scroll_offset"] = status.ui_scroll_offset;
-    j["ui_page_offset"] = status.ui_page_offset;
-    j["ui_editing"] = status.ui_editing;
-    j["ui_confirmation"] = ui_confirmation_json(status.ui_confirmation);
+    j["presentation"] = presentation_json(status.presentation);
     if (!status.clock_source.empty()) {
         j["clock_source"] = status.clock_source;
     }
@@ -756,6 +858,106 @@ bool MidiEventSubscriber::poll_once(MidiEventSummary& summary) {
     }
 }
 
+struct SequencerEventSubscriber::Impl {
+    void* context {nullptr};
+    void* socket {nullptr};
+};
+
+SequencerEventSubscriber::SequencerEventSubscriber(std::string endpoint)
+    : endpoint_(std::move(endpoint)), impl_(new Impl()) {
+    spdlog::debug("sequencer sub connect endpoint={}", endpoint_);
+    impl_->context = zmq_ctx_new();
+    if (impl_->context == nullptr) {
+        spdlog::error("zmq_ctx_new failed for sequencer subscriber {}: {}", endpoint_, zmq_strerror(zmq_errno()));
+        return;
+    }
+    impl_->socket = zmq_socket(impl_->context, ZMQ_SUB);
+    if (impl_->socket == nullptr) {
+        spdlog::error("zmq_socket(ZMQ_SUB) failed for sequencer subscriber {}: {}", endpoint_, zmq_strerror(zmq_errno()));
+        zmq_ctx_term(impl_->context);
+        impl_->context = nullptr;
+        return;
+    }
+    constexpr int recv_timeout_ms = 0;
+    constexpr int linger_ms = 0;
+    constexpr char topic_prefix[] = "sequencer.";
+    (void)zmq_setsockopt(impl_->socket, ZMQ_RCVTIMEO, &recv_timeout_ms, sizeof(recv_timeout_ms));
+    (void)zmq_setsockopt(impl_->socket, ZMQ_LINGER, &linger_ms, sizeof(linger_ms));
+    (void)zmq_setsockopt(impl_->socket, ZMQ_SUBSCRIBE, topic_prefix, sizeof(topic_prefix) - 1);
+    if (zmq_connect(impl_->socket, endpoint_.c_str()) != 0) {
+        spdlog::error("zmq_connect failed for sequencer subscriber {}: {}", endpoint_, zmq_strerror(zmq_errno()));
+        zmq_close(impl_->socket);
+        zmq_ctx_term(impl_->context);
+        impl_->socket = nullptr;
+        impl_->context = nullptr;
+    }
+}
+
+SequencerEventSubscriber::~SequencerEventSubscriber() {
+    if (impl_ != nullptr) {
+        if (impl_->socket != nullptr) {
+            zmq_close(impl_->socket);
+        }
+        if (impl_->context != nullptr) {
+            zmq_ctx_term(impl_->context);
+        }
+    }
+    delete impl_;
+}
+
+bool SequencerEventSubscriber::poll_once(UpstreamStatus& status, bool& semantic_state_changed) {
+    semantic_state_changed = false;
+    if (!(impl_ != nullptr && impl_->socket != nullptr)) {
+        return false;
+    }
+
+    zmq_pollitem_t items[] = {{impl_->socket, 0, ZMQ_POLLIN, 0}};
+    if (zmq_poll(items, 1, 0) <= 0 || (items[0].revents & ZMQ_POLLIN) == 0) {
+        return false;
+    }
+
+    zmq_msg_t topic_message;
+    zmq_msg_t payload_message;
+    zmq_msg_init(&topic_message);
+    zmq_msg_init(&payload_message);
+    const int topic_rc = zmq_msg_recv(&topic_message, impl_->socket, 0);
+    const int payload_rc = topic_rc < 0 ? -1 : zmq_msg_recv(&payload_message, impl_->socket, 0);
+    if (topic_rc < 0 || payload_rc < 0) {
+        spdlog::warn("sequencer sub recv failed endpoint={} err={}", endpoint_, zmq_strerror(zmq_errno()));
+        zmq_msg_close(&topic_message);
+        zmq_msg_close(&payload_message);
+        return true;
+    }
+
+    const std::string topic {
+        static_cast<const char*>(zmq_msg_data(&topic_message)),
+        zmq_msg_size(&topic_message),
+    };
+    const std::string payload {
+        static_cast<const char*>(zmq_msg_data(&payload_message)),
+        zmq_msg_size(&payload_message),
+    };
+    zmq_msg_close(&topic_message);
+    zmq_msg_close(&payload_message);
+
+    if (topic != "sequencer.state" && topic != "sequencer.clock") {
+        return true;
+    }
+
+    const auto root = json::parse(payload, nullptr, false);
+    if (!root.is_object()) {
+        spdlog::warn("sequencer sub invalid JSON endpoint={} topic={}", endpoint_, topic);
+        return true;
+    }
+
+    apply_sequencer_snapshot_json(root, status);
+    status.reachable = true;
+    status.service = root.value("service", std::string {"raptor-engine"});
+    status.summary = "event stream active";
+    semantic_state_changed = topic == "sequencer.state";
+    return true;
+}
+
 ControlClient::ControlClient(std::string endpoint) : endpoint_(std::move(endpoint)) {}
 ControlClient::~ControlClient() = default;
 
@@ -779,106 +981,7 @@ std::optional<UpstreamStatus> ControlClient::query_status(const std::string& req
         status.service = reply.value("service", "unknown");
         status.timestamp_ns = reply.value("timestamp_ns", static_cast<std::uint64_t>(0));
         if (reply.contains("snapshot") && reply["snapshot"].is_object()) {
-            const auto& snap = reply["snapshot"];
-            if (snap.contains("tick")) {
-                status.tick = snap.value("tick", static_cast<std::uint64_t>(0));
-            }
-            if (snap.contains("revision_epoch")) {
-                status.revision_epoch = snap.value("revision_epoch", static_cast<std::uint64_t>(0));
-            }
-            if (snap.contains("song_revision")) {
-                status.song_revision = snap.value("song_revision", static_cast<std::uint64_t>(0));
-            }
-            if (snap.contains("pattern_revision")) {
-                status.pattern_revision = snap.value("pattern_revision", static_cast<std::uint64_t>(0));
-            }
-            if (snap.contains("bpm")) {
-                status.bpm = snap.value("bpm", 0.0);
-            }
-            if (snap.contains("ppqn")) {
-                status.ppqn = snap.value("ppqn", static_cast<std::uint32_t>(0));
-            }
-            status.transport = snap.value("transport", "");
-            status.active_pattern = snap.value("active_pattern", "");
-            status.input_context = snap.value("input_context", std::string{"song"});
-            status.ui_scroll_offset = snap.value("ui_scroll_offset", static_cast<std::uint32_t>(0));
-            status.ui_page_offset = snap.value("ui_page_offset", static_cast<std::uint32_t>(0));
-            status.ui_editing = snap.value("ui_editing", false);
-            if (snap.contains("ui_confirmation") && snap["ui_confirmation"].is_object()) {
-                const auto& confirmation = snap["ui_confirmation"];
-                status.ui_confirmation.active = confirmation.value("active", false);
-                status.ui_confirmation.kind = confirmation.value("kind", std::string{});
-                status.ui_confirmation.title = confirmation.value("title", std::string{});
-                status.ui_confirmation.message = confirmation.value("message", std::string{});
-                status.ui_confirmation.confirm_label = confirmation.value("confirm_label", std::string{"Remove"});
-                status.ui_confirmation.cancel_label = confirmation.value("cancel_label", std::string{"Cancel"});
-                status.ui_confirmation.confirm_selected = confirmation.value("confirm_selected", false);
-            }
-            status.clock_source = snap.value("clock_source", std::string{});
-            status.clock_midi_source = snap.value("clock_midi_source", std::string{});
-            status.metronome_enabled = snap.value("metronome_enabled", false);
-            status.metronome_alsa_device = snap.value("metronome_alsa_device", std::string{});
-            if (snap.contains("chords_pad") && snap["chords_pad"].is_object()) {
-                const auto& chords = snap["chords_pad"];
-                status.chord_pad_right_hand_octave = std::clamp<std::uint32_t>(
-                    chords.value("right_hand_octave", static_cast<std::uint32_t>(4)),
-                    0U,
-                    8U);
-            }
-            if (snap.contains("chord_pad_pressed") && snap["chord_pad_pressed"].is_array()) {
-                status.chord_pad_pressed.assign(8, false);
-                const auto& pads = snap["chord_pad_pressed"];
-                for (std::size_t index = 0; index < pads.size() && index < status.chord_pad_pressed.size(); ++index) {
-                    if (pads[index].is_boolean()) {
-                        status.chord_pad_pressed[index] = pads[index].get<bool>();
-                    }
-                }
-            }
-            status.song.id = snap.value("current_song_id", std::string{});
-            status.song.title = snap.value("current_song_title", std::string{});
-            status.song.slot = snap.value("current_song_slot", -1);
-            status.song.active_track_id = snap.value("active_track_id", std::string{});
-            status.song.available = !status.song.id.empty() || !status.song.title.empty();
-            if (snap.contains("active_step")) {
-                status.active_step = snap.value("active_step", static_cast<std::uint32_t>(0));
-            }
-
-            if (snap.contains("bar")) {
-                status.bar = snap.value("bar", static_cast<std::uint32_t>(0));
-            }
-            if (snap.contains("bars_total")) {
-                status.bars_total = snap.value("bars_total", static_cast<std::uint32_t>(0));
-            }
-            if (snap.contains("beat")) {
-                status.beat = snap.value("beat", static_cast<std::uint32_t>(0));
-            }
-            if (snap.contains("beats_per_bar")) {
-                status.beats_per_bar = snap.value("beats_per_bar", static_cast<std::uint32_t>(0));
-            }
-            if (snap.contains("beat_unit")) {
-                status.beat_unit = snap.value("beat_unit", static_cast<std::uint32_t>(0));
-            }
-            if (snap.contains("active_clip_index")) {
-                status.active_clip_index = snap.value("active_clip_index", static_cast<std::uint32_t>(0));
-            }
-            if (snap.contains("midi_in_port")) {
-                status.midi_in_port = snap.value("midi_in_port", -1);
-            }
-            if (snap.contains("midi_in_channel")) {
-                status.midi_in_channel = snap.value("midi_in_channel", -1);
-            }
-            if (snap.contains("midi_out_port")) {
-                status.midi_out_port = snap.value("midi_out_port", -1);
-            }
-            if (snap.contains("midi_out_channel")) {
-                status.midi_out_channel = snap.value("midi_out_channel", -1);
-            }
-            if (snap.contains("recording_quantize")) {
-                status.recording_quantize = snap.value("recording_quantize", std::string{});
-            }
-            if (snap.contains("loop_quantize")) {
-                status.loop_quantize = snap.value("loop_quantize", std::string{});
-            }
+            apply_sequencer_snapshot_json(reply["snapshot"], status);
         }
 
         if (status.reachable && reply.contains("data")) {

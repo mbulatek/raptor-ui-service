@@ -36,16 +36,16 @@ void apply_fallback_page(UiSnapshot& snapshot, const std::string& view_id, const
     snapshot.page_image_y = 0;
 }
 
-std::vector<const PageConfig*> pages_for_view(const PageController& page_controller,
-                                              const DisplayConfig& display,
-                                              const std::string& view_id) {
-    std::vector<const PageConfig*> pages;
-    for (const auto& page : page_controller.pages()) {
-        if (page.type == view_id && page_supported_by_display(page, display)) {
-            pages.push_back(&page);
-        }
-    }
-    return pages;
+const PageConfig* page_for_presentation(const PageController& page_controller,
+                                        const DisplayConfig& display,
+                                        const std::string& view_id,
+                                        const std::string& page_id) {
+    const auto it = std::find_if(page_controller.pages().begin(), page_controller.pages().end(), [&](const PageConfig& page) {
+        return page.id == page_id &&
+               page.type == view_id &&
+               page_supported_by_display(page, display);
+    });
+    return it == page_controller.pages().end() ? nullptr : &*it;
 }
 
 }  // namespace
@@ -62,29 +62,33 @@ bool View::apply(UiSnapshot& snapshot, const PageController& page_controller) co
         return false;
     }
 
-    const auto pages = pages_for_view(page_controller, *display, id_);
+    const auto* page = page_for_presentation(
+        page_controller,
+        *display,
+        id_,
+        snapshot.sequencer.presentation.page);
     snapshot.view_id = id_;
-    snapshot.view_page_count = static_cast<std::uint32_t>(pages.size());
-    snapshot.view_page_index = 0;
+    snapshot.view_page_count = snapshot.sequencer.presentation.page_count;
+    snapshot.view_page_index = snapshot.sequencer.presentation.page_index;
 
-    if (pages.empty()) {
+    if (page == nullptr) {
         static std::vector<std::string> reported_missing_pages;
-        const std::string key = snapshot.display_id + "|" + id_;
+        const std::string key =
+            snapshot.display_id + "|" + id_ + "|" + snapshot.sequencer.presentation.page;
         if (std::find(reported_missing_pages.begin(), reported_missing_pages.end(), key) == reported_missing_pages.end()) {
             reported_missing_pages.push_back(key);
             spdlog::warn(
-                "ui view page missing display={} model={} view={}",
+                "ui presentation page missing display={} model={} view={} page={}",
                 snapshot.display_id,
                 snapshot.display_model,
-                id_);
+                id_,
+                snapshot.sequencer.presentation.page);
         }
         apply_fallback_page(snapshot, id_, title_);
         return true;
     }
 
-    const auto page_index = static_cast<std::uint32_t>(snapshot.sequencer.ui_page_offset % pages.size());
-    snapshot.view_page_index = page_index;
-    apply_page(snapshot, *pages[page_index]);
+    apply_page(snapshot, *page);
     return true;
 }
 
@@ -104,7 +108,7 @@ const View* ViewRegistry::find(const std::string_view id) const {
 }
 
 bool ViewRegistry::apply_active_view(UiSnapshot& snapshot, const PageController& page_controller) const {
-    const auto* view = find(snapshot.sequencer.input_context);
+    const auto* view = find(snapshot.sequencer.presentation.view);
     if (view == nullptr) {
         snapshot.view_id.clear();
         snapshot.view_page_index = 0;

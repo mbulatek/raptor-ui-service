@@ -92,37 +92,37 @@ pages:
     allowed_models: [oled_1in5, oled_1in5_b]
     default_variant: square
 
-  - id: perf_song_main
+  - id: song.overview
     type: song
     title: Song
     allowed_models: [oled_1in5_b]
     default_variant: song_overview
 
-  - id: perf_song_tracks_main
+  - id: song.tracks
     type: song
     title: Song
     allowed_models: [oled_1in5_b]
     default_variant: song_tracks
 
-  - id: perf_track_main
+  - id: track.parameters
     type: track
     title: Track
     allowed_models: [oled_1in5_b]
     default_variant: square
 
-  - id: perf_track_controllers_main
+  - id: track.controllers
     type: track
     title: Track
     allowed_models: [oled_1in5_b]
     default_variant: controller_lanes
 
-  - id: perf_settings_main
+  - id: settings.main
     type: settings
     title: Settings
     allowed_models: [oled_1in5_b]
     default_variant: square
 
-  - id: perf_chords_main
+  - id: chords.pads
     type: chords
     title: Chords pad
     allowed_models: [oled_1in5_b]
@@ -202,7 +202,7 @@ pages:
 
 assignments:
   - display_id: main
-    page_id: perf_song_main
+    page_id: song.overview
   - display_id: sidecar
     page_id: perf_midi_sidecar
   - display_id: mini
@@ -213,7 +213,7 @@ scenes:
     title: Performance
     assignments:
       - display_id: main
-        page_id: perf_song_main
+        page_id: song.overview
       - display_id: sidecar
         page_id: perf_midi_sidecar
       - display_id: mini

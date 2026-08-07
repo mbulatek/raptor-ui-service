@@ -56,6 +56,16 @@ struct UiConfirmationSummary {
     bool confirm_selected {false};
 };
 
+struct PresentationSummary {
+    std::string view {"song"};
+    std::string page {"song.overview"};
+    std::uint32_t page_index {0};
+    std::uint32_t page_count {2};
+    std::uint32_t focus_index {0};
+    bool editing {false};
+    UiConfirmationSummary confirmation;
+};
+
 struct UpstreamStatus {
     bool reachable {false};
     std::string service;
@@ -71,11 +81,7 @@ struct UpstreamStatus {
     std::optional<std::uint32_t> ppqn;
     std::string transport;
     std::string active_pattern;
-    std::string input_context {"song"};
-    std::uint32_t ui_scroll_offset {0};
-    std::uint32_t ui_page_offset {0};
-    bool ui_editing {false};
-    UiConfirmationSummary ui_confirmation;
+    PresentationSummary presentation;
     std::string clock_source;
     std::string clock_midi_source;
     bool metronome_enabled {false};
@@ -148,6 +154,22 @@ public:
     MidiEventSubscriber& operator=(const MidiEventSubscriber&) = delete;
 
     bool poll_once(MidiEventSummary& summary);
+
+private:
+    std::string endpoint_;
+    struct Impl;
+    Impl* impl_ {nullptr};
+};
+
+class SequencerEventSubscriber {
+public:
+    explicit SequencerEventSubscriber(std::string endpoint);
+    ~SequencerEventSubscriber();
+
+    SequencerEventSubscriber(const SequencerEventSubscriber&) = delete;
+    SequencerEventSubscriber& operator=(const SequencerEventSubscriber&) = delete;
+
+    bool poll_once(UpstreamStatus& status, bool& semantic_state_changed);
 
 private:
     std::string endpoint_;
