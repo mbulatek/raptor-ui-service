@@ -24,7 +24,7 @@ constexpr char kSchemaVersion[] = "1.0";
 constexpr char kServiceName[] = "raptor-native-ui";
 constexpr char kMidiTopic[] = "midi.packet";
 
-struct MidiPortLabelMap {
+struct MidiEndpointLabelMap {
     std::unordered_map<std::string, std::string> inputs;
     std::unordered_map<std::string, std::string> outputs;
 };
@@ -128,9 +128,9 @@ void apply_sequencer_snapshot_json(const json& snap, UpstreamStatus& status) {
     if (snap.contains("active_clip_index")) {
         status.active_clip_index = snap.value("active_clip_index", static_cast<std::uint32_t>(0));
     }
-    if (snap.contains("midi_in_port")) status.midi_in_port = snap.value("midi_in_port", -1);
+    status.midi_in_endpoint_id = snap.value("midi_in_endpoint_id", std::string{});
     if (snap.contains("midi_in_channel")) status.midi_in_channel = snap.value("midi_in_channel", -1);
-    if (snap.contains("midi_out_port")) status.midi_out_port = snap.value("midi_out_port", -1);
+    status.midi_out_endpoint_id = snap.value("midi_out_endpoint_id", std::string{});
     if (snap.contains("midi_out_channel")) status.midi_out_channel = snap.value("midi_out_channel", -1);
     if (snap.contains("recording_quantize")) {
         status.recording_quantize = snap.value("recording_quantize", std::string {});
@@ -142,7 +142,7 @@ json midi_json(const MidiEventSummary& midi) {
     return {
         {"available", midi.available},
         {"module_id", midi.module_id},
-        {"global_port", midi.global_port},
+        {"endpoint_id", midi.endpoint_id},
         {"bytes_hex", midi.bytes_hex},
         {"sequence", midi.sequence},
         {"timestamp_ns", midi.timestamp_ns},
@@ -242,15 +242,11 @@ json sequencer_json(const UpstreamStatus& status) {
     if (status.active_clip_index.has_value()) {
         j["active_clip_index"] = *status.active_clip_index;
     }
-    if (status.midi_in_port.has_value()) {
-        j["midi_in_port"] = *status.midi_in_port;
-    }
+    if (!status.midi_in_endpoint_id.empty()) j["midi_in_endpoint_id"] = status.midi_in_endpoint_id;
     if (status.midi_in_channel.has_value()) {
         j["midi_in_channel"] = *status.midi_in_channel;
     }
-    if (status.midi_out_port.has_value()) {
-        j["midi_out_port"] = *status.midi_out_port;
-    }
+    if (!status.midi_out_endpoint_id.empty()) j["midi_out_endpoint_id"] = status.midi_out_endpoint_id;
     if (status.midi_out_channel.has_value()) {
         j["midi_out_channel"] = *status.midi_out_channel;
     }
@@ -267,8 +263,8 @@ json sequencer_json(const UpstreamStatus& status) {
                 {"id", track.id},
                 {"name", track.name},
                 {"muted", track.muted},
-                {"midi_in", track.midi_in},
-                {"midi_out", track.midi_out},
+                {"midi_in_endpoint_id", track.midi_in_endpoint_id},
+                {"midi_out_endpoint_id", track.midi_out_endpoint_id},
                 {"midi_in_label", track.midi_in_label},
                 {"midi_out_label", track.midi_out_label},
                 {"midi_channel_in", track.midi_channel_in},
@@ -378,25 +374,15 @@ std::optional<json> request_control_json(const std::string& endpoint, const json
     }
 }
 
-std::string json_port_token(const json& value) {
-    if (value.is_string()) {
-        return value.get<std::string>();
-    }
-    if (value.is_number_integer()) {
-        return std::to_string(value.get<int>());
-    }
-    return {};
-}
-
 void add_label(std::unordered_map<std::string, std::string>& labels, const std::string& key, const std::string& label) {
     if (!key.empty() && !label.empty()) {
         labels[key] = label;
     }
 }
 
-MidiPortLabelMap midi_port_labels_from_project(const json& project_json) {
-    MidiPortLabelMap labels;
-    const auto ports_it = project_json.find("midi_ports");
+MidiEndpointLabelMap midi_endpoint_labels_from_project(const json& project_json) {
+    MidiEndpointLabelMap labels;
+    const auto ports_it = project_json.find("midi_endpoints");
     if (ports_it == project_json.end() || !ports_it->is_array()) {
         return labels;
     }
@@ -405,41 +391,29 @@ MidiPortLabelMap midi_port_labels_from_project(const json& project_json) {
         if (!p.is_object()) {
             continue;
         }
-        const std::string global_port = p.contains("global_port") ? json_port_token(p.at("global_port")) : std::string {};
-        const std::string device_id = p.value("device_id", std::string {});
+        const std::string endpoint_id = p.value("endpoint_id", std::string {});
         const std::string input_label = p.value("input_label", std::string {});
         const std::string output_label = p.value("output_label", std::string {});
 
-        add_label(labels.inputs, global_port, input_label.empty() ? output_label : input_label);
-        add_label(labels.outputs, global_port, output_label.empty() ? input_label : output_label);
-        add_label(labels.inputs, device_id, input_label.empty() ? output_label : input_label);
-        add_label(labels.outputs, device_id, output_label.empty() ? input_label : output_label);
+        add_label(labels.inputs, endpoint_id, input_label.empty() ? output_label : input_label);
+        add_label(labels.outputs, endpoint_id, output_label.empty() ? input_label : output_label);
     }
 
     return labels;
 }
 
 std::string midi_label_for(
-    const MidiPortLabelMap& labels,
-    const std::string& token,
-    const std::string& device_id,
+    const MidiEndpointLabelMap& labels,
+    const std::string& endpoint_id,
     const bool input) {
     const auto& map = input ? labels.inputs : labels.outputs;
-    if (!device_id.empty()) {
-        if (const auto it = map.find(device_id); it != map.end()) {
+    if (!endpoint_id.empty()) {
+        if (const auto it = map.find(endpoint_id); it != map.end()) {
             return it->second;
         }
     }
-    if (!token.empty()) {
-        if (const auto it = map.find(token); it != map.end()) {
-            return it->second;
-        }
-    }
-    if (token == "-1" || token == "any") {
+    if (endpoint_id == "any") {
         return "ANY";
-    }
-    if (token == "auto") {
-        return "Auto";
     }
     return {};
 }
@@ -634,7 +608,7 @@ SequencerSongSummary parse_song_summary_from_project(const json& project_json) {
     song.title = s.value("title", std::string{});
     song.slot = s.value("slot_index", -1);
     song.active_track_id = project_json.value("currentTrackId", std::string{});
-    const auto midi_labels = midi_port_labels_from_project(project_json);
+    const auto midi_labels = midi_endpoint_labels_from_project(project_json);
 
     if (s.contains("tracks") && s["tracks"].is_array()) {
         for (const auto& t : s["tracks"]) {
@@ -645,29 +619,19 @@ SequencerSongSummary parse_song_summary_from_project(const json& project_json) {
             track.id = t.value("id", std::string{});
             track.name = t.value("name", std::string{});
             track.muted = t.value("muted", false);
-            track.midi_in = t.value("midi_in", std::string{});
-            track.midi_out = t.value("midi_out", std::string{});
+            track.midi_in_endpoint_id = t.value("midi_in_endpoint_id", std::string{});
+            track.midi_out_endpoint_id = t.value("midi_out_endpoint_id", std::string{});
             track.send_sync_enabled = t.value("send_sync_enabled", false);
             track.midi_in_label = midi_label_for(
                 midi_labels,
-                track.midi_in,
-                t.value("midi_in_device_id", std::string{}),
+                track.midi_in_endpoint_id,
                 true);
             track.midi_out_label = midi_label_for(
                 midi_labels,
-                track.midi_out,
-                t.value("midi_out_device_id", std::string{}),
+                track.midi_out_endpoint_id,
                 false);
-            if (t.contains("midi_channel_in")) {
-                track.midi_channel_in = t.value("midi_channel_in", -1);
-            } else if (t.contains("midi_channel")) {
-                track.midi_channel_in = t.value("midi_channel", -1);
-            }
-            if (t.contains("midi_channel_out")) {
-                track.midi_channel_out = t.value("midi_channel_out", -1);
-            } else if (t.contains("midi_channel")) {
-                track.midi_channel_out = t.value("midi_channel", -1);
-            }
+            track.midi_channel_in = t.value("midi_channel_in", -1);
+            track.midi_channel_out = t.value("midi_channel_out", -1);
             track.controller_lanes = parse_controller_lanes_from_track(project_json, t);
             song.tracks.push_back(std::move(track));
         }
@@ -838,11 +802,11 @@ bool MidiEventSubscriber::poll_once(MidiEventSummary& summary) {
         const auto root = nlohmann::json::parse(text);
         summary.available = true;
         summary.module_id = root["source"].value("module_id", "");
-        summary.global_port = root["source"].value("global_port", -1);
+        summary.endpoint_id = root["source"].value("endpoint_id", std::string{});
         summary.bytes_hex = root["midi"].value("bytes_hex", "");
         summary.sequence = root.value("sequence", static_cast<std::uint64_t>(0));
         summary.timestamp_ns = root.value("timestamp_ns", static_cast<std::uint64_t>(0));
-        spdlog::debug("midi event seq={} module={} port={} bytes=""{}""", summary.sequence, summary.module_id, summary.global_port, summary.bytes_hex);
+        spdlog::debug("midi event seq={} module={} endpoint={} bytes=\"{}\"", summary.sequence, summary.module_id, summary.endpoint_id, summary.bytes_hex);
         return true;
     } catch (const std::exception& ex) {
         static std::uint64_t parse_failures = 0;

@@ -10,7 +10,7 @@ namespace raptor::ui {
 struct MidiEventSummary {
     bool available {false};
     std::string module_id;
-    int global_port {-1};
+    std::string endpoint_id;
     std::string bytes_hex;
     std::uint64_t sequence {0};
     std::uint64_t timestamp_ns {0};
@@ -27,8 +27,8 @@ struct SequencerTrackSummary {
     std::string id;
     std::string name;
     bool muted {false};
-    std::string midi_in;
-    std::string midi_out;
+    std::string midi_in_endpoint_id;
+    std::string midi_out_endpoint_id;
     std::string midi_in_label;
     std::string midi_out_label;
     int midi_channel_in {-1};   // 0..16, -1 unknown
@@ -97,9 +97,9 @@ struct UpstreamStatus {
     std::optional<std::uint32_t> beat_unit;
     std::optional<std::uint32_t> active_clip_index;
 
-    std::optional<int> midi_in_port;
+    std::string midi_in_endpoint_id;
     std::optional<int> midi_in_channel;
-    std::optional<int> midi_out_port;
+    std::string midi_out_endpoint_id;
     std::optional<int> midi_out_channel;
     std::string recording_quantize;
     std::string loop_quantize;
