@@ -22,6 +22,8 @@ extern "C" {
 namespace raptor::ui {
 namespace {
 
+std::string trim_text(const std::string& value, std::size_t max_chars);
+
 #pragma pack(push, 1)
 struct BmpFileHeader {
     std::uint16_t type;
@@ -169,7 +171,7 @@ void draw_status_page(const UiSnapshot& snapshot, const std::string& layout) {
         char line2[48];
         std::snprintf(line1, sizeof(line1), "%s %s", snapshot.page_title.c_str(), snapshot.sequencer.reachable ? "SEQ" : "OFF");
         if (snapshot.last_midi.available) {
-            std::snprintf(line2, sizeof(line2), "P%d %s", snapshot.last_midi.global_port, snapshot.last_midi.bytes_hex.c_str());
+            std::snprintf(line2, sizeof(line2), "%s %s", trim_text(snapshot.last_midi.endpoint_id, 12).c_str(), snapshot.last_midi.bytes_hex.c_str());
         } else {
             std::snprintf(line2, sizeof(line2), "waiting");
         }
@@ -185,7 +187,7 @@ void draw_status_page(const UiSnapshot& snapshot, const std::string& layout) {
         std::snprintf(line1, sizeof(line1), "%s", snapshot.page_title.c_str());
         std::snprintf(line2, sizeof(line2), "SEQ %s", snapshot.sequencer.reachable ? "UP" : "DOWN");
         if (snapshot.last_midi.available) {
-            std::snprintf(line3, sizeof(line3), "P%d %s", snapshot.last_midi.global_port, snapshot.last_midi.bytes_hex.c_str());
+            std::snprintf(line3, sizeof(line3), "%s %s", trim_text(snapshot.last_midi.endpoint_id, 12).c_str(), snapshot.last_midi.bytes_hex.c_str());
         } else {
             std::snprintf(line3, sizeof(line3), "MIDI idle");
         }
@@ -202,7 +204,7 @@ void draw_status_page(const UiSnapshot& snapshot, const std::string& layout) {
         std::snprintf(line1, sizeof(line1), "%s %s", snapshot.display_id.c_str(), snapshot.display_model.c_str());
         std::snprintf(line2, sizeof(line2), "SEQ: %s", snapshot.sequencer.reachable ? snapshot.sequencer.service.c_str() : "offline");
         if (snapshot.last_midi.available) {
-            std::snprintf(line3, sizeof(line3), "MIDI P%d %s", snapshot.last_midi.global_port, snapshot.last_midi.bytes_hex.c_str());
+            std::snprintf(line3, sizeof(line3), "MIDI %s %s", trim_text(snapshot.last_midi.endpoint_id, 16).c_str(), snapshot.last_midi.bytes_hex.c_str());
         } else {
             std::snprintf(line3, sizeof(line3), "MIDI waiting for data");
         }
@@ -215,7 +217,7 @@ void draw_status_page(const UiSnapshot& snapshot, const std::string& layout) {
     char line3[64];
     std::snprintf(line1, sizeof(line1), "SEQ %s", snapshot.sequencer.reachable ? "UP" : "DOWN");
     if (snapshot.last_midi.available) {
-        std::snprintf(line2, sizeof(line2), "P%d %s", snapshot.last_midi.global_port, snapshot.last_midi.bytes_hex.c_str());
+        std::snprintf(line2, sizeof(line2), "%s %s", trim_text(snapshot.last_midi.endpoint_id, 16).c_str(), snapshot.last_midi.bytes_hex.c_str());
     } else {
         std::snprintf(line2, sizeof(line2), "MIDI idle");
     }
@@ -453,34 +455,6 @@ std::size_t scroll_start_index(const std::uint32_t offset, const std::size_t tot
     return std::min<std::size_t>(static_cast<std::size_t>(offset), total - visible);
 }
 
-int parse_midi_port_token(const std::string& value) {
-    if (value.empty()) {
-        return -1;
-    }
-    try {
-        std::size_t consumed = 0;
-        const int parsed = std::stoi(value, &consumed, 10);
-        if (consumed == value.size()) {
-            return parsed;
-        }
-    } catch (...) {
-    }
-
-    int parsed = -1;
-    for (char c : value) {
-        if (c >= '0' && c <= '9') {
-            if (parsed < 0) {
-                parsed = c - '0';
-            } else {
-                parsed = (parsed * 10) + (c - '0');
-            }
-        } else if (parsed >= 0) {
-            break;
-        }
-    }
-    return parsed;
-}
-
 const SequencerTrackSummary* find_focused_track(const UiSnapshot& snapshot) {
     if (!snapshot.sequencer.song.available || snapshot.sequencer.song.tracks.empty()) {
         return nullptr;
@@ -494,23 +468,22 @@ const SequencerTrackSummary* find_focused_track(const UiSnapshot& snapshot) {
         }
     }
 
-    const auto out_port = snapshot.sequencer.midi_out_port.value_or(-1);
+    const auto& out_endpoint = snapshot.sequencer.midi_out_endpoint_id;
     const auto out_ch = snapshot.sequencer.midi_out_channel.value_or(-1);
-    if (out_port >= 0) {
+    if (!out_endpoint.empty()) {
         for (const auto& track : snapshot.sequencer.song.tracks) {
-            const int track_out_port = parse_midi_port_token(track.midi_out);
-            if (track_out_port == out_port && (out_ch <= 0 || track.midi_channel_out == out_ch)) {
+            if (track.midi_out_endpoint_id == out_endpoint && (out_ch <= 0 || track.midi_channel_out == out_ch)) {
                 return &track;
             }
         }
     }
 
-    const auto in_port = snapshot.sequencer.midi_in_port.value_or(-1);
+    const auto& in_endpoint = snapshot.sequencer.midi_in_endpoint_id;
     const auto in_ch = snapshot.sequencer.midi_in_channel.value_or(-1);
-    if (in_port >= 0) {
+    if (!in_endpoint.empty()) {
         for (const auto& track : snapshot.sequencer.song.tracks) {
-            const int track_in_port = parse_midi_port_token(track.midi_in);
-            if (track_in_port == in_port && (in_ch <= 0 || track.midi_channel_in == in_ch)) {
+            if ((track.midi_in_endpoint_id == "any" || track.midi_in_endpoint_id == in_endpoint) &&
+                (in_ch <= 0 || track.midi_channel_in == in_ch)) {
                 return &track;
             }
         }
@@ -655,16 +628,16 @@ void draw_track_page(const UiSnapshot& snapshot, const std::string& layout) {
     int ch_out = -1;
     bool send_sync_enabled = false;
     if (track != nullptr) {
-        midi_in = track->midi_in.empty() ? "-" : track->midi_in;
-        midi_out = track->midi_out.empty() ? "-" : track->midi_out;
+        midi_in = track->midi_in_endpoint_id.empty() ? "-" : track->midi_in_endpoint_id;
+        midi_out = track->midi_out_endpoint_id.empty() ? "-" : track->midi_out_endpoint_id;
         midi_in_label = track->midi_in_label;
         midi_out_label = track->midi_out_label;
         ch_in = track->midi_channel_in;
         ch_out = track->midi_channel_out;
         send_sync_enabled = track->send_sync_enabled;
     } else {
-        if (snapshot.sequencer.midi_in_port.has_value()) midi_in = std::to_string(*snapshot.sequencer.midi_in_port);
-        if (snapshot.sequencer.midi_out_port.has_value()) midi_out = std::to_string(*snapshot.sequencer.midi_out_port);
+        if (!snapshot.sequencer.midi_in_endpoint_id.empty()) midi_in = snapshot.sequencer.midi_in_endpoint_id;
+        if (!snapshot.sequencer.midi_out_endpoint_id.empty()) midi_out = snapshot.sequencer.midi_out_endpoint_id;
         ch_in = snapshot.sequencer.midi_in_channel.value_or(-1);
         ch_out = snapshot.sequencer.midi_out_channel.value_or(-1);
     }
@@ -759,31 +732,31 @@ void draw_recording_page(const UiSnapshot& snapshot, const std::string& layout) 
 
     std::snprintf(clip_line, sizeof(clip_line), "Clip %d", clip_index);
 
-    const int in_port = snapshot.sequencer.midi_in_port.value_or(-1);
+    const std::string in_endpoint = snapshot.sequencer.midi_in_endpoint_id;
     const int in_ch = snapshot.sequencer.midi_in_channel.value_or(-1);
-    if (in_port >= 0) {
+    if (!in_endpoint.empty()) {
         if (in_ch > 0) {
-            std::snprintf(in_line, sizeof(in_line), "IN  P%d  CH%d", in_port, in_ch);
+            std::snprintf(in_line, sizeof(in_line), "IN  %s CH%d", trim_text(in_endpoint, 12).c_str(), in_ch);
         } else {
-            std::snprintf(in_line, sizeof(in_line), "IN  P%d", in_port);
+            std::snprintf(in_line, sizeof(in_line), "IN  %s", trim_text(in_endpoint, 16).c_str());
         }
     } else if (snapshot.last_midi.available) {
         if (midi_ch > 0) {
-            std::snprintf(in_line, sizeof(in_line), "IN  P%d  CH%d", snapshot.last_midi.global_port, midi_ch);
+            std::snprintf(in_line, sizeof(in_line), "IN  %s CH%d", trim_text(snapshot.last_midi.endpoint_id, 12).c_str(), midi_ch);
         } else {
-            std::snprintf(in_line, sizeof(in_line), "IN  P%d", snapshot.last_midi.global_port);
+            std::snprintf(in_line, sizeof(in_line), "IN  %s", trim_text(snapshot.last_midi.endpoint_id, 16).c_str());
         }
     } else {
         std::snprintf(in_line, sizeof(in_line), "IN  ---");
     }
 
-    const int out_port = snapshot.sequencer.midi_out_port.value_or(-1);
+    const std::string out_endpoint = snapshot.sequencer.midi_out_endpoint_id;
     const int out_ch = snapshot.sequencer.midi_out_channel.value_or(-1);
-    if (out_port >= 0) {
+    if (!out_endpoint.empty()) {
         if (out_ch > 0) {
-            std::snprintf(out_line, sizeof(out_line), "OUT P%d  CH%d", out_port, out_ch);
+            std::snprintf(out_line, sizeof(out_line), "OUT %s CH%d", trim_text(out_endpoint, 12).c_str(), out_ch);
         } else {
-            std::snprintf(out_line, sizeof(out_line), "OUT P%d", out_port);
+            std::snprintf(out_line, sizeof(out_line), "OUT %s", trim_text(out_endpoint, 16).c_str());
         }
     } else {
         std::snprintf(out_line, sizeof(out_line), "OUT ---");
@@ -822,7 +795,7 @@ void draw_midi_page(const UiSnapshot& snapshot, const std::string& layout) {
 
     char line1[64];
     char line2[64];
-    std::snprintf(line1, sizeof(line1), "PORT %d", snapshot.last_midi.global_port);
+    std::snprintf(line1, sizeof(line1), "%s", trim_text(snapshot.last_midi.endpoint_id, 20).c_str());
     std::snprintf(line2, sizeof(line2), "%s", snapshot.last_midi.available ? snapshot.last_midi.bytes_hex.c_str() : "NO MIDI");
     Paint_DrawString_EN(0, 0, snapshot.page_title.c_str(), &Font12, WHITE, BLACK);
     Paint_DrawString_EN(0, 20, line1, &Font16, WHITE, BLACK);
